@@ -9,6 +9,7 @@ import '../race/race_replay.dart';
 import '../race/race_repository.dart';
 import '../race/venues.dart';
 import '../scene/track_scene.dart';
+import 'camera_bar.dart';
 import 'hud.dart';
 import 'race_picker.dart';
 import 'timeline_bar.dart';
@@ -39,6 +40,7 @@ class _TrackScreenState extends State<TrackScreen> {
   Circuit? _circuit;
   RaceReplay? _replay;
   TrackColorMode _colorMode = TrackColorMode.sectors;
+  CameraMode _cameraMode = CameraMode.orbit;
   bool _sceneReady = false;
   bool _loadingRace = false;
   String? _raceError;
@@ -140,8 +142,11 @@ class _TrackScreenState extends State<TrackScreen> {
     // Detach the old replay from the scene and the overlay before disposing
     // it, so nothing ticks or listens to it afterwards.
     final previous = _replay;
-    _trackScene.showRace(null);
+    _trackScene
+      ..showRace(null)
+      ..cameraMode = CameraMode.orbit;
     setState(() {
+      _cameraMode = CameraMode.orbit;
       _race = race;
       _replay = null;
       _loadingRace = true;
@@ -173,6 +178,13 @@ class _TrackScreenState extends State<TrackScreen> {
         _replay = replay;
         _loadingRace = false;
       });
+      // Debug builds: report any surfaces that trade pixels (z-fighting).
+      assert(() {
+        _trackScene.scene.probeDepthConflicts().then(
+          (r) => debugPrint('Depth conflicts: ${r.describe()}'),
+        );
+        return true;
+      }());
     } catch (e) {
       debugPrint('Race load failed: $e');
       if (stale()) return;
@@ -205,6 +217,28 @@ class _TrackScreenState extends State<TrackScreen> {
     setState(() => _colorMode = mode);
   }
 
+  void _setCameraMode(CameraMode mode) {
+    _trackScene.cameraMode = mode;
+    setState(() => _cameraMode = mode);
+  }
+
+  void _follow(int driver) {
+    _trackScene.followedDriver = driver;
+    setState(() {});
+  }
+
+  void _resetView() {
+    switch (_cameraMode) {
+      case CameraMode.orbit:
+        _trackScene.resetView();
+      case CameraMode.chase:
+        _trackScene.chase.resetView();
+      case CameraMode.tv:
+        _setCameraMode(CameraMode.orbit);
+        _trackScene.resetView();
+    }
+  }
+
   @override
   Widget build(BuildContext context) {
     final circuit = _circuit;
@@ -224,7 +258,8 @@ class _TrackScreenState extends State<TrackScreen> {
           ),
           if (_sceneReady)
             CameraControls(
-              controller: _trackScene.orbit,
+              controller: _trackScene.activeController,
+              enabled: _cameraMode != CameraMode.tv,
               child: SceneView(
                 _trackScene.scene,
                 warmUp: true,
@@ -259,14 +294,24 @@ class _TrackScreenState extends State<TrackScreen> {
                     ],
                   ),
                   const Spacer(),
-                  Row(
+                  Wrap(
+                    spacing: 8,
+                    runSpacing: 12,
+                    crossAxisAlignment: WrapCrossAlignment.center,
                     children: [
                       ColorModeMenu(mode: _colorMode, onChanged: _setColorMode),
-                      const SizedBox(width: 8),
                       IconButton.filledTonal(
                         tooltip: 'Reset view',
-                        onPressed: _trackScene.resetView,
+                        onPressed: _resetView,
                         icon: const Icon(Icons.center_focus_strong),
+                      ),
+                      const SizedBox(width: 4),
+                      CameraBar(
+                        mode: _cameraMode,
+                        drivers: _replay?.drivers ?? const [],
+                        followed: _trackScene.followedDriver,
+                        onMode: _setCameraMode,
+                        onFollow: _follow,
                       ),
                     ],
                   ),

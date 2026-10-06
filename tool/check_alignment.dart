@@ -12,6 +12,8 @@ import 'dart:math' as math;
 import 'package:f1_scene/src/data/circuit.dart';
 import 'package:f1_scene/src/geometry/track_alignment.dart';
 import 'package:f1_scene/src/geometry/track_mesh.dart';
+import 'package:f1_scene/src/geometry/track_projector.dart';
+import 'package:f1_scene/src/race/pit_lane_tracer.dart';
 import 'package:f1_scene/src/race/race_repository.dart';
 import 'package:f1_scene/src/race/venues.dart';
 
@@ -67,12 +69,23 @@ Future<void> main(List<String> args) async {
       target: [for (final c in stations.center) (c.x, c.z)],
     );
     final t = result.transform;
+    final track = TrackProjector(stations);
+    final pit = await tracePitLane(
+      repository: repository,
+      session: race,
+      stops: await repository.pitStops(race.sessionKey),
+      transform: t,
+      track: track,
+    );
+    final pitText = pit == null
+        ? 'no pit lane'
+        : 'pit lane ${(TrackProjector(pit).metersPerStation * pit.segmentCount).toStringAsFixed(0)} m';
     stdout.writeln(
       '${race.meetingName.padRight(28)} $id  '
       'rms ${result.rmsError.toStringAsFixed(1).padLeft(5)} m  '
       'scale ${t.scale.toStringAsFixed(4)}  '
       'rot ${(t.rotation * 180 / math.pi).toStringAsFixed(0).padLeft(4)}°  '
-      '${t.mirrored ? 'mirrored' : ''}',
+      '${t.mirrored ? 'mirrored ' : ''}$pitText',
     );
   }
   exit(0);

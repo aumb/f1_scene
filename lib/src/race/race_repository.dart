@@ -101,6 +101,22 @@ class RaceRepository {
     ];
   }
 
+  Future<List<RacePitStop>> pitStops(int sessionKey) async {
+    final rows = await _client.get('pit', {'session_key': sessionKey});
+    return [
+      for (final p in rows)
+        if (p['date'] != null)
+          RacePitStop(
+            driverNumber: p['driver_number'] as int,
+            lapNumber: p['lap_number'] as int? ?? 0,
+            date: DateTime.parse(p['date'] as String),
+            laneDuration: (p['lane_duration'] ?? p['pit_duration']) == null
+                ? null
+                : ((p['lane_duration'] ?? p['pit_duration']) as num).toDouble(),
+          ),
+    ];
+  }
+
   /// Car positions in `[from, to)`, optionally for one [driver].
   Future<LocationBatch> locations(
     int sessionKey, {

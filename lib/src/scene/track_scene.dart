@@ -5,20 +5,43 @@ import 'package:vector_math/vector_math.dart' as vm;
 
 import '../data/circuit.dart';
 import '../geometry/track_mesh.dart';
+import '../geometry/track_projector.dart';
+import '../race/car_motion.dart';
 import '../race/race_replay.dart';
 import 'cars_layer.dart';
+import 'race_cameras.dart';
+
+enum CameraMode {
+  /// Free orbit around the whole circuit.
+  orbit,
+
+  /// Behind the followed car.
+  chase,
+
+  /// Trackside broadcast cameras on the followed car.
+  tv,
+}
 
 /// Owns the flutter_scene [Scene] for a circuit diorama: a dark base slab,
-/// the extruded track ribbon, a start/finish line, lights, an orbit camera
-/// and, during a replay, the cars.
+/// the extruded track ribbon, a start/finish line, lights, the cameras and,
+/// during a replay, the cars and pit lane.
 ///
 /// Plain Dart, no widgets; `TrackScreen` displays it.
 class TrackScene {
   final Scene scene = Scene();
 
-  /// Drives the camera; wire input with a `CameraControls` widget.
+  /// Free camera around the circuit.
   late final OrbitCameraController orbit;
+
+  /// Camera behind the followed car.
+  late final ChaseCameraController chase;
+
   late final Node _camera;
+  late final PerspectiveProjection _projection;
+  TvCameraController? _tv;
+  CameraMode _cameraMode = CameraMode.orbit;
+  int? _followed;
+  Map<int, CarPose> _poses = const {};
 
   Circuit? _circuit;
   TrackMeshBuilder? _builder;
@@ -26,6 +49,8 @@ class TrackScene {
   MeshGeometry? _surface;
   RaceReplay? _replay;
   CarsLayer? _cars;
+  Node? _raceRoot;
+  double _baseY = 0;
 
   /// World meters between the lowest point of the track and the slab.
   static const double _plinth = 1.5;
@@ -54,6 +79,11 @@ class TrackScene {
     ..roughnessFactor = 0.6
     // Lies on the track surface; win the depth tie at any distance.
     ..depthLayer = 1;
+  final _pitMaterial = PhysicallyBasedMaterial()
+    ..metallicFactor = 0
+    ..roughnessFactor = 0.7
+    // Where the pit lane merges into the track, the track wins.
+    ..depthLayer = -1;
 
   Future<void> initialize() async {
     await Scene.initializeStaticResources();
@@ -98,22 +128,51 @@ class TrackScene {
       minPolar: 0.08,
       smoothing: 0.12,
     );
+    chase = ChaseCameraController()..target = _followedPose;
+    _projection = PerspectiveProjection(
+      fovRadiansY: _fovY,
+      near: 1,
+      far: 40000,
+    );
     _camera = Node(name: 'camera');
     scene.add(
       _camera
         ..addComponent(
-          CameraComponent(
-            projection: PerspectiveProjection(
-              fovRadiansY: _fovY,
-              near: 1,
-              far: 40000,
-            ),
-            activateOnMount: true,
-          ),
+          CameraComponent(projection: _projection, activateOnMount: true),
         )
         ..addComponent(orbit),
     );
   }
+
+  CameraMode get cameraMode => _cameraMode;
+
+  /// Switches the camera. Chase and TV film [followedDriver].
+  set cameraMode(CameraMode mode) {
+    if (mode == _cameraMode) return;
+    _camera.removeComponent(activeController);
+    _cameraMode = mode;
+    _projection.fovRadiansY = _fovY;
+    chase.reset();
+    _tv?.reset();
+    _camera.addComponent(activeController);
+  }
+
+  /// The controller driving the camera now, for `CameraControls`.
+  CameraController get activeController => switch (_cameraMode) {
+    CameraMode.orbit => orbit,
+    CameraMode.chase => chase,
+    CameraMode.tv => _tv ?? orbit,
+  };
+
+  /// The driver the chase and TV cameras film, outlined in orbit view.
+  int? get followedDriver => _followed;
+  set followedDriver(int? driver) {
+    _followed = driver;
+    chase.reset();
+    _tv?.reset();
+  }
+
+  CarPose? _followedPose() => _poses[_followed];
 
   Circuit? get circuit => _circuit;
 
@@ -157,26 +216,82 @@ class TrackScene {
     _builder = builder;
     _diorama = root;
     _surface = surface;
+    _baseY = baseY;
+
+    final tv = TvCameraController(
+      posts: TvCameraController.placePosts(stations, TrackProjector(stations)),
+      projection: _projection,
+    )..target = _followedPose;
+    if (_cameraMode == CameraMode.tv) {
+      _camera
+        ..removeComponent(activeController)
+        ..addComponent(tv);
+    }
+    _tv = tv;
     frameCircuit();
   }
 
-  /// Shows the cars of [replay] on the current circuit, or none. The caller
-  /// keeps ownership of the replay.
+  /// Shows the cars and pit lane of [replay] on the current circuit, or
+  /// none. The caller keeps ownership of the replay.
   void showRace(RaceReplay? replay) {
-    final cars = _cars;
-    if (cars != null) scene.remove(cars.root);
+    final previous = _raceRoot;
+    if (previous != null) scene.remove(previous);
     _replay = replay;
-    _cars = replay == null ? null : CarsLayer(replay.drivers);
-    if (_cars case final cars?) scene.add(cars.root);
+    _poses = const {};
+    _cars = null;
+    _raceRoot = null;
+    if (replay == null) return;
+
+    final cars = CarsLayer(replay.drivers);
+    final root = Node(name: 'race')..add(cars.root);
+    final pitLane = replay.pitLane;
+    if (pitLane != null) {
+      root.add(
+        Node(
+          name: 'pit lane',
+          mesh: Mesh.primitives(
+            primitives: [
+              MeshPrimitive(
+                _geometry(
+                  ribbonSurface(
+                    pitLane,
+                    uniformRibbonColors(pitLane, linearColor(0x3A3E46)),
+                  ),
+                ),
+                _pitMaterial,
+              ),
+              MeshPrimitive(
+                _geometry(ribbonSkirts(pitLane, _baseY)),
+                _skirtMaterial,
+              ),
+            ],
+          ),
+        ),
+      );
+    }
+    scene.add(root);
+    _cars = cars;
+    _raceRoot = root;
+    if (!replay.drivers.any((d) => d.number == _followed)) {
+      followedDriver = replay.featuredDriver;
+    }
   }
 
-  /// Per-frame update: advances the replay and poses the cars.
+  /// Per-frame update: advances the replay and poses the cars. Runs before
+  /// the camera controllers update, so they see this frame's poses.
   void tick(double deltaSeconds) {
     final replay = _replay, cars = _cars;
     if (replay == null || cars == null) return;
     replay.tick(deltaSeconds);
-    // Grow cars with distance so they stay readable from far away.
-    cars.update(replay.poses(), scale: (orbit.distance / 300).clamp(1.0, 10.0));
+    _poses = replay.poses();
+    // From the orbit camera, grow cars with distance so they stay readable;
+    // the chase and TV cameras are close enough for real size.
+    final scale = _cameraMode == CameraMode.orbit
+        ? (orbit.distance / 300).clamp(1.0, 10.0)
+        : 1.0;
+    cars
+      ..update(_poses, scale: scale)
+      ..highlighted = _cameraMode == CameraMode.orbit ? _followed : null;
   }
 
   /// Re-tints the driving surface without rebuilding anything else.

@@ -2,25 +2,15 @@ import 'dart:async';
 import 'dart:math' as math;
 
 import 'package:flutter/foundation.dart';
-import 'package:vector_math/vector_math.dart';
 
-import '../geometry/point_grid.dart';
 import '../geometry/track_alignment.dart';
 import '../geometry/track_mesh.dart';
+import '../geometry/track_projector.dart';
+import 'car_motion.dart';
 import 'location_timeline.dart';
+import 'pit_lane_tracer.dart';
 import 'race_models.dart';
 import 'race_repository.dart';
-
-/// Where a car is at some moment, in scene space.
-class CarPose {
-  const CarPose(this.position, this.heading);
-
-  /// On the track surface.
-  final Vector3 position;
-
-  /// Yaw in radians about +Y; 0 faces +Z.
-  final double heading;
-}
 
 /// Plays back one race: owns its data, the alignment from OpenF1's circuit
 /// frame onto the scene, and the playback clock.
@@ -31,16 +21,14 @@ class RaceReplay extends ChangeNotifier {
     required this.session,
     required this.drivers,
     required this.alignment,
+    required this.pitLane,
+    required this.featuredDriver,
     required this._repository,
-    required this._stations,
+    required this._motion,
     required this._leaderLapStarts,
     required this.raceStart,
     required double end,
-  }) : _stationGrid = PointGrid(
-         [for (final c in _stations.center) c.x],
-         [for (final c in _stations.center) c.z],
-       ),
-       timeline = LocationTimeline(start: raceStart - _preRoll, end: end) {
+  }) : timeline = LocationTimeline(start: raceStart - _preRoll, end: end) {
     time.value = raceStart - 15;
   }
 
@@ -51,9 +39,10 @@ class RaceReplay extends ChangeNotifier {
     required RaceSession session,
     required TrackStations stations,
   }) async {
-    final (drivers, laps) = await (
+    final (drivers, laps, pitStops) = await (
       repository.drivers(session.sessionKey),
       repository.laps(session.sessionKey),
+      repository.pitStops(session.sessionKey),
     ).wait;
     if (drivers.isEmpty || laps.isEmpty) {
       throw StateError('OpenF1 has no timing for ${session.meetingName}');
@@ -103,12 +92,41 @@ class RaceReplay extends ChangeNotifier {
       '${alignment.transform}, rms ${alignment.rmsError.toStringAsFixed(1)} m',
     );
 
+    final track = TrackProjector(stations);
+    TrackStations? pitLane;
+    try {
+      pitLane = await tracePitLane(
+        repository: repository,
+        session: session,
+        stops: pitStops,
+        transform: alignment.transform,
+        track: track,
+      );
+    } catch (e) {
+      // The pit lane is a nicety; never fail the replay over it.
+      debugPrint('No pit lane: $e');
+    }
+
+    // Lead the camera with whoever led after lap 1.
+    final lap2 = laps.where((l) => l.lapNumber == 2 && l.start != null);
+    final featured = lap2.isEmpty
+        ? drivers.first.number
+        : lap2
+              .reduce((a, b) => a.start!.isBefore(b.start!) ? a : b)
+              .driverNumber;
+
     return RaceReplay._(
       session: session,
       drivers: drivers,
       alignment: alignment,
+      pitLane: pitLane,
+      featuredDriver: featured,
       repository: repository,
-      stations: stations,
+      motion: CarMotion(
+        alignment: alignment.transform,
+        track: track,
+        pitLane: pitLane == null ? null : TrackProjector(pitLane),
+      ),
       leaderLapStarts: leaderLapStarts,
       raceStart: leaderLapStarts.first,
       end: lastFinish + 60,
@@ -143,15 +161,19 @@ class RaceReplay extends ChangeNotifier {
   final List<RaceDriver> drivers;
   final AlignmentResult alignment;
 
+  /// Traced from a pit stop; null when the race had none.
+  final TrackStations? pitLane;
+
+  /// Who to follow by default: the leader after lap 1.
+  final int featuredDriver;
+
   /// Lights out, in seconds since session start.
   final double raceStart;
   final LocationTimeline timeline;
 
   final RaceRepository _repository;
-  final TrackStations _stations;
-  final PointGrid _stationGrid;
+  final CarMotion _motion;
   final List<double> _leaderLapStarts;
-  final _headings = <int, double>{};
   final _retryAfter = <int, DateTime>{};
   bool _disposed = false;
 
@@ -226,25 +248,19 @@ class RaceReplay extends ChangeNotifier {
     return {for (final d in drivers) d.number: ?_poseOf(d.number, t)};
   }
 
+  /// One car's pose. Release builds hide a car whose data trips the motion
+  /// code rather than freezing every car; debug builds surface the error.
   CarPose? _poseOf(int driver, double t) {
-    final raw = timeline.positionAt(driver, t);
-    if (raw == null) return null;
-    final (x, z) = alignment.transform.apply(raw.$1, raw.$2);
-    final station = _stationGrid.nearest(x, z).index;
-    final y = _stations.center[station].y;
-
-    // Heading from motion; hold the last one while the car is stopped.
-    final before = timeline.positionAt(driver, t - 0.4);
-    final after = timeline.positionAt(driver, t + 0.4);
-    if (before != null && after != null) {
-      final (bx, bz) = alignment.transform.apply(before.$1, before.$2);
-      final (ax, az) = alignment.transform.apply(after.$1, after.$2);
-      if ((ax - bx) * (ax - bx) + (az - bz) * (az - bz) > 1) {
-        _headings[driver] = math.atan2(ax - bx, az - bz);
-      }
+    try {
+      return _motion.pose(driver, timeline.windowAt(driver, t), t);
+    } catch (e) {
+      if (kDebugMode) rethrow;
+      if (_failedDrivers.add(driver)) debugPrint('Car $driver hidden: $e');
+      return null;
     }
-    return CarPose(Vector3(x, y, z), _headings[driver] ?? 0);
   }
+
+  final _failedDrivers = <int>{};
 
   void _requestChunks() {
     final ahead = _speed >= 16 ? 2 : 1;

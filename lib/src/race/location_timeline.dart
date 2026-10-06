@@ -73,8 +73,26 @@ class LocationTimeline {
 
   Iterable<int> get drivers => _series.keys;
 
+  /// Up to four consecutive samples of [driver] around [t] for smooth
+  /// interpolation: the pair bracketing [t] (at [SampleWindow.bracket] and
+  /// the next index), plus the neighbour either side when no gap separates
+  /// it. Null when no pair brackets [t] without a gap.
+  SampleWindow? windowAt(int driver, double t) => _series[driver]?.window(t);
+
   /// Interpolated raw position of [driver] at [t], or null without data.
   (double, double)? positionAt(int driver, double t) => _series[driver]?.at(t);
+}
+
+/// Consecutive raw samples; see [LocationTimeline.windowAt].
+class SampleWindow {
+  const SampleWindow(this.t, this.x, this.y, this.bracket);
+
+  final List<double> t;
+  final List<double> x;
+  final List<double> y;
+
+  /// Index of the sample at or before the requested time.
+  final int bracket;
 }
 
 class _Series {
@@ -101,6 +119,23 @@ class _Series {
     if (t1 - t0 > LocationTimeline.maxGap) return null;
     final f = (time - t0) / (t1 - t0);
     return (x[i - 1] + (x[i] - x[i - 1]) * f, y[i - 1] + (y[i] - y[i - 1]) * f);
+  }
+
+  SampleWindow? window(double time) {
+    final i = _lowerBound(time);
+    // a: last sample at or before [time].
+    final a = (i < t.length && t[i] == time) ? i : i - 1;
+    if (a < 0 || a + 1 >= t.length) return null;
+    if (t[a + 1] - t[a] > LocationTimeline.maxGap) return null;
+    var from = a, to = a + 1;
+    if (from > 0 && t[from] - t[from - 1] <= LocationTimeline.maxGap) from--;
+    if (to + 1 < t.length && t[to + 1] - t[to] <= LocationTimeline.maxGap) to++;
+    return SampleWindow(
+      t.sublist(from, to + 1),
+      x.sublist(from, to + 1),
+      y.sublist(from, to + 1),
+      a - from,
+    );
   }
 
   /// First index whose time is >= [time].

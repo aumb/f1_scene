@@ -12,8 +12,8 @@ exploring it. Runs on the web, macOS, iOS and Android.
 | --- | --- | --- |
 | 1 | Circuit dioramas: real width and elevation, sectors, orbit camera | done |
 | 2 | Races from [OpenF1](https://openf1.org), cars moving on a scrubbable timeline | done |
-| 3 | Cars snapped to the track by lap distance, pit lane, car model, follow and TV cameras | next |
-| 4 | HUD: timing tower, sectors, DRS zones, kerbs | |
+| 3 | Cars riding the track, pit lane, car model, chase and TV cameras | done |
+| 4 | HUD: timing tower, sectors, DRS zones, kerbs | next |
 | 5 | Terrain, buildings, GitHub Pages build | |
 
 31 circuits are included, covering every venue on the 2023–2025 calendars.
@@ -63,6 +63,15 @@ tool/         Data vendoring and alignment check scripts
   tool/check_alignment.dart 2024`). Positions stream in 5-minute chunks around
   the playhead, within OpenF1's free rate limits, and playback waits while a
   chunk loads.
+- **Car motion.** Each position sample is expressed along the circuit (or the
+  pit lane) and interpolated there with a monotone Hermite curve, so cars
+  follow corners instead of cutting the chords between samples ~20 m apart,
+  keep a steady speed, and stay inside the track edges despite alignment
+  error. The pit lane is traced from one typical pit stop's positions.
+- **Cars and cameras.** The car is a low-poly 2026-proportioned model built
+  in code (body in the team colour). Besides the orbit view, a chase camera
+  turns with the followed car, and a TV mode cuts between trackside posts on
+  the outside of corners, zooming to keep the car framed.
 
 ## Data
 

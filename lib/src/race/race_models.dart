@@ -66,3 +66,21 @@ class RaceLap {
   final double? duration;
   final bool isPitOutLap;
 }
+
+class RacePitStop {
+  const RacePitStop({
+    required this.driverNumber,
+    required this.lapNumber,
+    required this.date,
+    required this.laneDuration,
+  });
+
+  final int driverNumber;
+  final int lapNumber;
+
+  /// When the car entered the pit lane.
+  final DateTime date;
+
+  /// Seconds from pit entry to pit exit, if timing recorded it.
+  final double? laneDuration;
+}
