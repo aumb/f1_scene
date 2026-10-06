@@ -85,6 +85,19 @@ tool/         Data vendoring and alignment check scripts
   turns with the followed car, and a TV mode cuts between trackside posts on
   the outside of corners, zooming to keep the car framed.
 
+## Controls
+
+The orbit camera behaves like a map: the ground follows the pointer and
+zooming heads for whatever is under the cursor.
+
+| | Rotate | Pan | Zoom |
+|---|---|---|---|
+| Mouse | left drag | right or middle drag, shift + drag | wheel |
+| Trackpad | click + drag (twist in desktop builds) | two-finger swipe | pinch |
+| Touch | one finger | two fingers | pinch |
+
+Add `?stats` to the URL (or press **F**) for an FPS and frame-time overlay.
+
 ## Deploying
 
 [`.github/workflows/pages.yml`](.github/workflows/pages.yml) analyzes,

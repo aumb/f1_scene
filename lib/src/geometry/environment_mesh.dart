@@ -48,6 +48,30 @@ class EnvironmentMeshBuilder {
     return a + (b - a) * ty;
   }
 
+  /// The height something at ([x], [z]) must stay above to clear both the
+  /// ground and the roof of any building standing there.
+  double clearanceAt(double x, double z) {
+    var top = groundAt(x, z);
+    for (final b in _roofs) {
+      if (b.box.contains(x, z) && _inside(b.ring, x, z)) {
+        top = math.max(top, b.top);
+      }
+    }
+    return top;
+  }
+
+  late final List<({_Box box, List<Vector2> ring, double top})> _roofs = [
+    for (final b in environment.buildings)
+      if (_open(b.points) case final ring when ring.length >= 3)
+        (
+          box: _Box.of(ring),
+          ring: ring,
+          top:
+              ring.map((p) => groundAt(p.x, p.y)).reduce(math.min) +
+              (b.height > 0 ? b.height : 8),
+        ),
+  ];
+
   /// Lowest ground height, for sizing the block under it.
   double get lowestGround => _ground.reduce(math.min);
 

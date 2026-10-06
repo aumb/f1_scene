@@ -66,4 +66,20 @@ void main() {
     );
     expect(OpenF1Client.filterText('date<', '2024'), 'date%3C2024');
   });
+
+  test('reads OpenF1 timestamps like DateTime.parse does', () {
+    for (final text in [
+      '2024-03-02T15:20:00.138000+00:00',
+      '2024-03-02T15:20:00+00:00',
+      '2026-12-31T23:59:59.999999+00:00',
+      '2024-02-29T00:00:00.5Z',
+      '2023-01-01T00:00:00.000000+02:00',
+    ]) {
+      expect(
+        RaceRepository.isoSeconds(text),
+        closeTo(DateTime.parse(text).microsecondsSinceEpoch / 1e6, 1e-6),
+        reason: text,
+      );
+    }
+  });
 }

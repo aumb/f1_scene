@@ -1,8 +1,14 @@
+import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 
 import 'src/ui/track_screen.dart';
 
-void main() => runApp(const F1SceneApp());
+void main() {
+  // Right-drag pans the camera; keep the browser's menu out of the way.
+  if (kIsWeb) BrowserContextMenu.disableContextMenu();
+  runApp(const F1SceneApp());
+}
 
 class F1SceneApp extends StatelessWidget {
   const F1SceneApp({super.key});

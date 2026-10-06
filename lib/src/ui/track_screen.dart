@@ -1,4 +1,5 @@
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import 'package:flutter_scene/scene.dart';
 
 import '../data/circuit.dart';
@@ -12,8 +13,10 @@ import '../race/venues.dart';
 import '../scene/track_scene.dart';
 import 'camera_bar.dart';
 import 'driver_card.dart';
+import 'frame_stats.dart';
 import 'hud.dart';
 import 'race_picker.dart';
+import 'scene_gestures.dart';
 import 'timing_tower.dart';
 import 'timeline_bar.dart';
 
@@ -46,6 +49,11 @@ class _TrackScreenState extends State<TrackScreen> {
   TrackColorMode _colorMode = TrackColorMode.sectors;
   CameraMode _cameraMode = CameraMode.orbit;
   bool _sceneReady = false;
+
+  /// Frame timing readout, on with `?stats` in the URL or the F key.
+  final _frameStats = FrameStats();
+  bool _showStats = Uri.base.queryParameters.containsKey('stats');
+  final _tickWatch = Stopwatch();
   bool _loadingRace = false;
   String? _raceError;
   Object? _fatalError;
@@ -230,6 +238,15 @@ class _TrackScreenState extends State<TrackScreen> {
     }
   }
 
+  void _onTick(Duration elapsed, double dt) {
+    _tickWatch
+      ..reset()
+      ..start();
+    _trackScene.tick(dt);
+    _tickWatch.stop();
+    _frameStats.record(dt, _tickWatch.elapsedMicroseconds / 1e6);
+  }
+
   void _setColorMode(TrackColorMode mode) {
     _trackScene.setColorMode(mode);
     setState(() => _colorMode = mode);
@@ -321,6 +338,16 @@ class _TrackScreenState extends State<TrackScreen> {
   @override
   Widget build(BuildContext context) {
     final circuit = _circuit;
+    return CallbackShortcuts(
+      bindings: {
+        const SingleActivator(LogicalKeyboardKey.keyF): () =>
+            setState(() => _showStats = !_showStats),
+      },
+      child: _scaffold(circuit),
+    );
+  }
+
+  Widget _scaffold(Circuit? circuit) {
     return Scaffold(
       body: Stack(
         fit: StackFit.expand,
@@ -336,13 +363,13 @@ class _TrackScreenState extends State<TrackScreen> {
             ),
           ),
           if (_sceneReady)
-            CameraControls(
-              controller: _trackScene.activeController,
+            SceneGestures(
+              input: _trackScene,
               enabled: _cameraMode != CameraMode.tv,
               child: SceneView(
                 _trackScene.scene,
                 warmUp: true,
-                onTick: (_, dt) => _trackScene.tick(dt),
+                onTick: _onTick,
               ),
             ),
           if (_fatalError != null)
@@ -398,6 +425,13 @@ class _TrackScreenState extends State<TrackScreen> {
                       onRetry: _retry,
                     ),
                   const SizedBox(height: 12),
+                  if (_showStats) ...[
+                    Align(
+                      alignment: Alignment.centerLeft,
+                      child: FrameStatsView(stats: _frameStats),
+                    ),
+                    const SizedBox(height: 6),
+                  ],
                   const Attribution(),
                 ],
               ),

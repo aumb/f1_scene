@@ -8,7 +8,12 @@ import 'location_timeline.dart';
 
 /// Where a car is at some moment, in scene space.
 class CarPose {
-  const CarPose(this.position, this.heading, {this.inPit = false});
+  const CarPose(
+    this.position,
+    this.heading, {
+    this.pitch = 0,
+    this.inPit = false,
+  });
 
   /// On the driving surface.
   final Vector3 position;
@@ -16,8 +21,18 @@ class CarPose {
   /// Yaw in radians about +Y; 0 faces +Z.
   final double heading;
 
+  /// Nose-up angle in radians, following the track's gradient so the car
+  /// sits on slopes instead of cutting into them.
+  final double pitch;
+
   /// In the pit lane, or crossing into or out of it.
   final bool inPit;
+
+  /// The car's orientation: yaw, then pitch about its own lateral axis.
+  /// Maps the model's forward (+Z) onto the direction of travel.
+  Quaternion get rotation =>
+      Quaternion.axisAngle(Vector3(0, 1, 0), heading) *
+      Quaternion.axisAngle(Vector3(1, 0, 0), -pitch);
 }
 
 /// Turns raw OpenF1 position samples into poses that ride the track.
@@ -45,19 +60,28 @@ class CarMotion {
   static const double _pitMaxDistance = 15.0;
 
   final _trackHints = <int, int>{};
-  final _pitHints = <int, int>{};
+
+  /// Each driver's recently located samples by time. Playback walks forward
+  /// a sample or two per frame, so a handful covers the window; locating a
+  /// sample once also keeps its place fixed instead of shifting with the
+  /// projection hint from frame to frame.
+  final _located = <int, Map<double, _Located>>{};
+  static const _cacheSize = 16;
 
   /// The pose of [driver] at [t] from its samples [window], or null.
   CarPose? pose(int driver, SampleWindow? window, double t) {
     if (window == null) return null;
+    final cache = _located.putIfAbsent(driver, () => <double, _Located>{});
     final samples = [
       for (var i = 0; i < window.t.length; i++)
-        _locate(driver, window.x[i], window.y[i]),
+        cache[window.t[i]] ??= _locate(driver, window.x[i], window.y[i]),
     ];
+    while (cache.length > _cacheSize) {
+      cache.remove(cache.keys.first);
+    }
     final a = window.bracket, b = a + 1;
     final sa = samples[a], sb = samples[b];
     _trackHints[driver] = sa.track.station;
-    if (sa.pit case final pit?) _pitHints[driver] = pit.station;
 
     final dt = window.t[b] - window.t[a];
     final f = dt > 0 ? ((t - window.t[a]) / dt).clamp(0.0, 1.0) : 0.0;
@@ -112,18 +136,57 @@ class CarMotion {
               dt
         : 0.0;
 
-    final la = pointOf(sa).lateral, lb = pointOf(sb).lateral;
-    final (lo, hi) = projector.lateralLimits(position, margin: carHalfWidth);
-    final lateral = (la + (lb - la) * f).clamp(lo, hi);
-    final placed = projector.place(position, lateral);
-
-    var heading = math.atan2(placed.forward.x, placed.forward.z);
-    final speed = velocity * projector.metersPerStation;
-    if (speed > 2 && dt > 0) {
-      // Yaw into a lane change, capped so noise never spins a car.
-      heading += math.atan2((lb - la) / dt, speed).clamp(-0.5, 0.5);
+    // Lateral offsets carry a meter or so of noise (sensor, alignment), so
+    // each is averaged with its neighbours on the same path before being
+    // interpolated like the position along it.
+    double? lateralOf(int i) =>
+        i >= 0 && i < samples.length && samples[i].onPit == onPit
+        ? pointOf(samples[i]).lateral
+        : null;
+    double smoothed(int i) {
+      final c = lateralOf(i)!;
+      final before = lateralOf(i - 1) ?? c, after = lateralOf(i + 1) ?? c;
+      return (before + 2 * c + after) / 4;
     }
-    return CarPose(placed.position, heading, inPit: onPit);
+
+    final la = smoothed(a), lb = smoothed(b);
+    final lateralSecant = dt > 0 ? (lb - la) / dt : 0.0;
+    double lateralTangent(int i, int j) {
+      final li = lateralOf(i), lj = lateralOf(j);
+      if (li == null || lj == null) return lateralSecant;
+      return (lj - li) / (window.t[j] - window.t[i]);
+    }
+
+    final n0 = lateralTangent(a - 1, b) * dt,
+        n1 = lateralTangent(a, b + 1) * dt;
+    final rawLateral =
+        (2 * f3 - 3 * f2 + 1) * la +
+        (f3 - 2 * f2 + f) * n0 +
+        (-2 * f3 + 3 * f2) * lb +
+        (f3 - f2) * n1;
+    final lateralVelocity = dt > 0
+        ? ((6 * f2 - 6 * f) * la +
+                  (3 * f2 - 4 * f + 1) * n0 +
+                  (-6 * f2 + 6 * f) * lb +
+                  (3 * f2 - 2 * f) * n1) /
+              dt
+        : 0.0;
+    final (lo, hi) = projector.lateralLimits(position, margin: carHalfWidth);
+    final placed = projector.place(position, rawLateral.clamp(lo, hi));
+
+    final forward = placed.forward;
+    var heading = math.atan2(forward.x, forward.z);
+    final speed = velocity * projector.metersPerStation;
+    if (speed > 2) {
+      // Yaw into a lane change, capped so noise never twitches a car.
+      heading += math.atan2(lateralVelocity, speed).clamp(-0.3, 0.3);
+    }
+    return CarPose(
+      placed.position,
+      heading,
+      pitch: math.asin(forward.y.clamp(-1.0, 1.0)),
+      inPit: onPit,
+    );
   }
 
   /// Crossing between track and pit lane: straight-line blend of the two
@@ -147,11 +210,18 @@ class CarMotion {
       final (lo, hi) = track.lateralLimits(onTrack.along);
       final beyond = math.max(onTrack.lateral - hi, lo - onTrack.lateral);
       if (beyond > _pitMinOffTrack) {
-        final candidate = pitLane.project(x, z, hint: _pitHints[driver]);
+        // Only the pit lane within reach matters; an uncapped search from
+        // the far side of the circuit walks thousands of grid cells.
+        final candidate = pitLane.projectWithin(
+          x,
+          z,
+          math.min(_pitMaxDistance, beyond),
+        );
         // Closer to the pit lane than to the track: a car on a straight
         // wider than the track's estimated width (Monaco's grid sits next
         // to the pit lane) stays on track.
-        if (candidate.distance <= _pitMaxDistance &&
+        if (candidate != null &&
+            candidate.distance <= _pitMaxDistance &&
             candidate.distance < beyond) {
           pit = candidate;
         }

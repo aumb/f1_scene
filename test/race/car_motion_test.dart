@@ -6,7 +6,7 @@ import 'package:f1_scene/src/geometry/track_projector.dart';
 import 'package:f1_scene/src/race/car_motion.dart';
 import 'package:f1_scene/src/race/location_timeline.dart';
 import 'package:flutter_test/flutter_test.dart';
-import 'package:vector_math/vector_math.dart' show Vector3;
+import 'package:vector_math/vector_math.dart' show Matrix4, Vector3;
 
 import '../support/circuits.dart';
 
@@ -167,6 +167,32 @@ void main() {
       1,
     )!;
     expect(inLane.inPit, isTrue);
+  });
+
+  test('pitches with the gradient and points the nose along the track', () {
+    final motion = CarMotion(alignment: identity, track: track);
+    // The steepest station on the lap.
+    var steepest = 0;
+    for (var i = 0; i < stations.length; i++) {
+      if (stations.forward[i].y.abs() > stations.forward[steepest].y.abs()) {
+        steepest = i;
+      }
+    }
+    final pose = motion.pose(
+      1,
+      windowAround(1, from: steepest.toDouble(), speed: 0.001, lateral: 0),
+      1,
+    )!;
+    final forward = stations.forward[steepest];
+    expect(pose.pitch, closeTo(math.asin(forward.y), 0.01));
+    // Through a transform matrix, as the renderer applies it
+    // (Quaternion.rotated applies the inverse rotation).
+    final nose = Matrix4.compose(
+      Vector3.zero(),
+      pose.rotation,
+      Vector3.all(1),
+    ).transform3(Vector3(0, 0, 1));
+    expect(nose.dot(forward), greaterThan(0.999));
   });
 
   test('crosses the start/finish seam without a jump', () {

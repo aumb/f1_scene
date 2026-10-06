@@ -1,3 +1,5 @@
+import 'dart:math' as math;
+
 import 'openf1_client.dart';
 import 'race_models.dart';
 
@@ -178,16 +180,12 @@ class RaceRepository {
       'date<': _timestamp(to),
     });
     final open = <int, List<double>>{};
+    final origin = epoch.microsecondsSinceEpoch / 1e6;
     for (final r in rows) {
       if (const {10, 12, 14}.contains(r['drs'])) {
         open
             .putIfAbsent(r['driver_number'] as int, () => [])
-            .add(
-              DateTime.parse(r['date'] as String)
-                      .difference(epoch)
-                      .inMicroseconds /
-                  1e6,
-            );
+            .add(isoSeconds(r['date'] as String) - origin);
       }
     }
     return open;
@@ -224,16 +222,56 @@ class RaceRepository {
       'date<': _timestamp(to),
     });
     final batch = LocationBatch(epoch);
+    final origin = epoch.microsecondsSinceEpoch / 1e6;
     for (final r in rows) {
-      final t = DateTime.parse(r['date'] as String).difference(epoch);
       batch.add(
         r['driver_number'] as int,
-        t.inMicroseconds / 1e6,
+        isoSeconds(r['date'] as String) - origin,
         (r['x'] as num).toDouble(),
         (r['y'] as num).toDouble(),
       );
     }
     return batch;
+  }
+
+  /// Seconds since the Unix epoch of an OpenF1 timestamp such as
+  /// `2024-03-02T15:20:00.138000+00:00`.
+  ///
+  /// Position chunks carry ~25k of these; reading the fixed layout directly
+  /// is several times faster than `DateTime.parse` on the web. Anything not
+  /// in that layout (an offset other than UTC) falls back to it.
+  static double isoSeconds(String s) {
+    final plusZero = s.length >= 25 && s.endsWith('+00:00');
+    if (!plusZero && !s.endsWith('Z')) {
+      return DateTime.parse(s).microsecondsSinceEpoch / 1e6;
+    }
+    int digits(int from, int to) {
+      var v = 0;
+      for (var i = from; i < to; i++) {
+        v = v * 10 + s.codeUnitAt(i) - 48;
+      }
+      return v;
+    }
+
+    final year = digits(0, 4), month = digits(5, 7), day = digits(8, 10);
+    final seconds =
+        digits(11, 13) * 3600 + digits(14, 16) * 60 + digits(17, 19);
+    var fraction = 0.0;
+    final end = plusZero ? s.length - 6 : s.length - 1;
+    if (end > 20 && s.codeUnitAt(19) == 46) {
+      fraction = digits(20, end) / math.pow(10, end - 20);
+    }
+    return _daysFromCivil(year, month, day) * 86400.0 + seconds + fraction;
+  }
+
+  /// Days since 1970-01-01 of a proleptic Gregorian date (H. Hinnant).
+  static int _daysFromCivil(int y, int m, int d) {
+    final yy = m <= 2 ? y - 1 : y;
+    final era = (yy >= 0 ? yy : yy - 399) ~/ 400;
+    final yoe = yy - era * 400;
+    final doy = (153 * (m + (m > 2 ? -3 : 9)) + 2) ~/ 5 + d - 1;
+    final doe = yoe * 365 + yoe ~/ 4 - yoe ~/ 100 + doy;
+    return era * 146097 + doe - 719468;
   }
 
   /// OpenF1 treats offset-free timestamps as UTC.

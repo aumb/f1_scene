@@ -95,7 +95,8 @@ class TvCameraController extends CameraController {
     : super(smoothing: 0.15);
 
   /// Trackside camera positions, from [TvCameraController.placePosts].
-  final List<Vector3> posts;
+  /// Replace them when the scenery arrives so none sits inside it.
+  List<Vector3> posts;
 
   /// The lens to zoom; restore its field of view when leaving this mode.
   final PerspectiveProjection projection;

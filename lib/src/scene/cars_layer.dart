@@ -63,7 +63,7 @@ class CarsLayer {
         ..visible = true
         ..localTransform = vm.Matrix4.compose(
           pose.position,
-          vm.Quaternion.axisAngle(vm.Vector3(0, 1, 0), pose.heading),
+          pose.rotation,
           vm.Vector3.all(scale),
         );
     }

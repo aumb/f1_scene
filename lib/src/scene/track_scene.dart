@@ -1,4 +1,5 @@
 import 'dart:math' as math;
+import 'dart:ui' show Offset, Size;
 
 import 'package:flutter_scene/scene.dart';
 import 'package:vector_math/vector_math.dart' as vm;
@@ -11,6 +12,7 @@ import '../geometry/track_projector.dart';
 import '../race/car_motion.dart';
 import '../race/race_replay.dart';
 import 'cars_layer.dart';
+import 'map_camera.dart';
 import 'race_cameras.dart';
 
 enum CameraMode {
@@ -29,11 +31,11 @@ enum CameraMode {
 /// during a replay, the cars and pit lane.
 ///
 /// Plain Dart, no widgets; `TrackScreen` displays it.
-class TrackScene {
+class TrackScene implements CameraInput {
   final Scene scene = Scene();
 
   /// Free camera around the circuit.
-  late final OrbitCameraController orbit;
+  late final MapCameraController orbit;
 
   /// Camera behind the followed car.
   late final ChaseCameraController chase;
@@ -147,29 +149,85 @@ class TrackScene {
       shadowNormalBias: 2.0,
     );
 
-    orbit = OrbitCameraController(
-      distance: 2500,
-      azimuth: _defaultAzimuth,
-      polar: _defaultPolar,
-      minDistance: 25,
-      maxDistance: 9000,
-      minPolar: 0.08,
-      smoothing: 0.12,
-    );
+    orbit = MapCameraController(azimuth: _defaultAzimuth, polar: _defaultPolar)
+      ..camera = () => _cameraComponent.toCamera();
     chase = ChaseCameraController()..target = _followedPose;
     _projection = PerspectiveProjection(
       fovRadiansY: _fovY,
       near: 1,
       far: 40000,
     );
+    _cameraComponent = CameraComponent(
+      projection: _projection,
+      activateOnMount: true,
+    );
     _camera = Node(name: 'camera');
     scene.add(
       _camera
-        ..addComponent(
-          CameraComponent(projection: _projection, activateOnMount: true),
-        )
+        ..addComponent(_cameraComponent)
         ..addComponent(orbit),
     );
+  }
+
+  late final CameraComponent _cameraComponent;
+
+  // Camera input, routed to whichever camera is active. TV cameras take
+  // none; the chase camera has no pan, so a pan swings it round the car.
+
+  @override
+  set viewportSize(Size size) {
+    orbit.viewportSize = size;
+    chase.viewportSize = size;
+  }
+
+  @override
+  void orbitDrag(Offset delta) {
+    switch (_cameraMode) {
+      case CameraMode.orbit:
+        final k = math.pi / math.max(1.0, orbit.viewportSize.height);
+        // Drag down to look from higher up, as in map apps.
+        orbit.orbitBy(-delta.dx * k, delta.dy * k);
+      case CameraMode.chase:
+        chase.handleDragUpdate(delta);
+      case CameraMode.tv:
+        break;
+    }
+  }
+
+  @override
+  void rotate(double radians) {
+    switch (_cameraMode) {
+      case CameraMode.orbit:
+        orbit.orbitBy(radians, 0);
+      case CameraMode.chase:
+        chase.yawOffset += radians;
+      case CameraMode.tv:
+        break;
+    }
+  }
+
+  @override
+  void panDrag(Offset from, Offset to) {
+    switch (_cameraMode) {
+      case CameraMode.orbit:
+        orbit.dragGround(from, to);
+      case CameraMode.chase:
+        chase.handleDragUpdate(to - from);
+      case CameraMode.tv:
+        break;
+    }
+  }
+
+  @override
+  void zoomAt(double factor, Offset focal) {
+    switch (_cameraMode) {
+      case CameraMode.orbit:
+        orbit.zoomAt(factor, focal);
+      case CameraMode.chase:
+        chase.distance = (chase.distance / factor).clamp(6.0, 200.0);
+      case CameraMode.tv:
+        break;
+    }
   }
 
   CameraMode get cameraMode => _cameraMode;
@@ -242,22 +300,23 @@ class TrackScene {
         Node(
           name: 'kerbs',
           mesh: Mesh(_geometry(builder.kerbs()), _kerbMaterial),
-        ),
+        )..shadowCastingMode = ShadowCastingMode.off,
       )
       ..add(
         Node(
           name: 'start-finish',
           mesh: Mesh(_geometry(builder.startFinishLine()), _lineMaterial),
-        ),
+        )..shadowCastingMode = ShadowCastingMode.off,
       );
     if (circuit.sectors.length > 1) {
       root.add(
         Node(
           name: 'sector lines',
           mesh: Mesh(_geometry(builder.sectorLines()), _lineMaterial),
-        ),
+        )..shadowCastingMode = ShadowCastingMode.off,
       );
     }
+    _markStatic(root);
     scene.add(root);
 
     _circuit = circuit;
@@ -320,24 +379,46 @@ class TrackScene {
         Node(
           name: 'roads',
           mesh: Mesh(_geometry(meshes.roads()), _roadMaterial),
-        ),
+        )..shadowCastingMode = ShadowCastingMode.off,
       )
       ..add(
         Node(
           name: 'water',
           mesh: Mesh(_geometry(meshes.water()), _waterMaterial),
-        ),
+        )..shadowCastingMode = ShadowCastingMode.off,
       );
     final trees = meshes.trees();
     if (trees.isNotEmpty) node.add(_trees(trees));
+    _markStatic(node);
     root.add(node);
     _environmentNode = node;
+
+    // Lift any TV camera post that now sits inside a hill or a building,
+    // onto the roof like a real broadcast position.
+    final tv = _tv;
+    if (tv != null) {
+      tv.posts = [
+        for (final p in tv.posts)
+          vm.Vector3(p.x, math.max(p.y, meshes.clearanceAt(p.x, p.z) + 4), p.z),
+      ];
+      tv.reset();
+    }
 
     // Reach the skirts down into the block, so no gap opens under the
     // ribbon where the ground falls away.
     _baseY = baseY;
     skirts.updatePositions(builder.skirts(baseY).positions);
     sceneryVisible = _sceneryVisible;
+  }
+
+  /// Flags every node under [node] as a static shadow caster, so the
+  /// engine caches its shadow map instead of redrawing it each frame. Only
+  /// for content that never moves.
+  static void _markStatic(Node node) {
+    node.shadowStatic = true;
+    for (final child in node.children) {
+      _markStatic(child);
+    }
   }
 
   Node _trees(List<vm.Vector3> positions) {
@@ -408,7 +489,7 @@ class TrackScene {
               ),
             ],
           ),
-        ),
+        )..shadowStatic = true,
       );
     }
     scene.add(root);
@@ -435,7 +516,7 @@ class TrackScene {
         _geometry(builder.drsBands([for (final z in zones) (z.start, z.end)])),
         _drsMaterial,
       ),
-    );
+    )..shadowCastingMode = ShadowCastingMode.off;
     root.add(node);
     _drsNode = node;
   }
@@ -476,23 +557,13 @@ class TrackScene {
     final halfFovY = _fovY / 2;
     final halfFovX = math.atan(math.tan(halfFovY) * aspect);
     final distance = radius / math.sin(math.min(halfFovX, halfFovY));
-    // OrbitCameraController.frame places the eye at radius * 2 * margin.
-    orbit.frame(bounds, margin: distance * 1.05 / (radius * 2));
+    orbit.frame(bounds.center, distance * 1.05);
   }
 
   /// Frames the circuit and eases back to the default viewing angle.
   void resetView() {
     frameCircuit();
-    // OrbitCameraController exposes no angle getters, so recover them from
-    // the eye offset: (-sin(az) * h, sin(polar) * d, -cos(az) * h).
-    final offset = _camera.globalTransform.getTranslation() - orbit.target;
-    if (offset.length2 == 0) return;
-    final azimuth = math.atan2(-offset.x, -offset.z);
-    final polar = math.asin((offset.y / offset.length).clamp(-1.0, 1.0));
-    // Turn the short way round.
-    final turn =
-        (_defaultAzimuth - azimuth + math.pi) % (2 * math.pi) - math.pi;
-    orbit.orbitBy(turn, _defaultPolar - polar);
+    orbit.setAngles(azimuth: _defaultAzimuth, polar: _defaultPolar);
   }
 
   /// The diorama base: a dark block whose top sits [_plinth] below the
