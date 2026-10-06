@@ -13,6 +13,9 @@ class FrameStats {
   /// Updated twice a second.
   final summary = ValueNotifier<FrameSummary?>(null);
 
+  /// The scene's render scale, shown alongside.
+  double renderScale = 1;
+
   /// Records one frame: [interval] since the previous one and [work] spent
   /// in the app's tick, both in seconds.
   void record(double interval, double work) {
@@ -88,7 +91,8 @@ class FrameStatsView extends StatelessWidget {
                 ? 'measuring…'
                 : '${s.fps.toStringAsFixed(0)} fps · p95 ${ms(s.p95)} · '
                       'worst ${ms(s.worst)} · slow ${s.slowFrames}/120\n'
-                      'tick ${ms(s.work)} · worst ${ms(s.workWorst)}',
+                      'tick ${ms(s.work)} · worst ${ms(s.workWorst)} · '
+                      'scale ${stats.renderScale.toStringAsFixed(2)}',
             style: style,
           ),
         ),

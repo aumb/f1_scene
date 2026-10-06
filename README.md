@@ -117,6 +117,12 @@ zooming heads for whatever is under the cursor.
 
 Add `?stats` to the URL (or press **F**) for an FPS and frame-time overlay.
 
+The 3D view's cost is mostly per pixel, so on a large or high-density screen
+it renders below full resolution: it starts within a pixel budget for the
+window and then adapts, dropping resolution while frames miss the display's
+refresh and climbing back once they don't. `?scale=0.75` (or any value up
+to 1) fixes the scale instead.
+
 ## Deploying
 
 [`.github/workflows/pages.yml`](.github/workflows/pages.yml) analyzes,

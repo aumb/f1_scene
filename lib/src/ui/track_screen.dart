@@ -9,6 +9,7 @@ import '../race/race_models.dart';
 import '../race/race_replay.dart';
 import '../race/race_repository.dart';
 import '../race/venues.dart';
+import '../scene/adaptive_resolution.dart';
 import '../scene/track_scene.dart';
 import 'frame_stats.dart';
 import 'hud_style.dart';
@@ -50,6 +51,14 @@ class _TrackScreenState extends State<TrackScreen> {
   final _frameStats = FrameStats();
   bool _showStats = Uri.base.queryParameters.containsKey('stats');
   final _tickWatch = Stopwatch();
+
+  /// Render resolution, adapted to what the GPU sustains unless `?scale=`
+  /// in the URL fixes it.
+  final _resolution = AdaptiveResolution();
+  final double? _fixedScale = double.tryParse(
+    Uri.base.queryParameters['scale'] ?? '',
+  );
+  bool _resolutionStarted = false;
   bool _loadingRace = false;
   String? _raceError;
   Object? _fatalError;
@@ -241,6 +250,26 @@ class _TrackScreenState extends State<TrackScreen> {
     _trackScene.tick(dt);
     _tickWatch.stop();
     _frameStats.record(dt, _tickWatch.elapsedMicroseconds / 1e6);
+    _adaptResolution(dt);
+  }
+
+  void _adaptResolution(double dt) {
+    final scene = _trackScene.scene;
+    final fixed = _fixedScale;
+    if (fixed != null) {
+      scene.renderScale = fixed.clamp(0.25, 1.0);
+    } else if (!_resolutionStarted) {
+      // Start within a pixel budget for this viewport, then adapt.
+      final size = _trackScene.orbit.viewportSize;
+      if (size.width <= 1) return;
+      final ratio = View.of(context).devicePixelRatio;
+      _resolution.start(size.width * size.height * ratio * ratio);
+      scene.renderScale = _resolution.scale;
+      _resolutionStarted = true;
+    } else if (_resolution.record(dt)) {
+      scene.renderScale = _resolution.scale;
+    }
+    _frameStats.renderScale = scene.renderScale;
   }
 
   void _setCameraMode(CameraMode mode) {
