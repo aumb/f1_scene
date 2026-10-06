@@ -43,6 +43,10 @@ class TrackScene implements CameraInput {
   late final Node _camera;
   late final PerspectiveProjection _projection;
   TvCameraController? _tv;
+
+  /// TV posts around the plain slab, and around the scenery once loaded.
+  List<TvPost> _slabPosts = const [];
+  List<TvPost>? _sceneryPosts;
   CameraMode _cameraMode = CameraMode.orbit;
   int? _followed;
   Map<int, CarPose> _poses = const {};
@@ -327,8 +331,12 @@ class TrackScene implements CameraInput {
     _environmentNode = null;
     _baseY = baseY;
 
+    final projector = TrackProjector(stations);
+    _slabPosts = TvCameraController.placePosts(stations, projector);
+    _sceneryPosts = null;
     final tv = TvCameraController(
-      posts: TvCameraController.placePosts(stations, TrackProjector(stations)),
+      posts: _slabPosts,
+      track: projector,
       projection: _projection,
     )..target = _followedPose;
     if (_cameraMode == CameraMode.tv) {
@@ -348,6 +356,13 @@ class TrackScene implements CameraInput {
     final environment = _environmentNode;
     environment?.visible = visible;
     _slabNode?.visible = environment == null || !visible;
+    final posts = visible ? _sceneryPosts ?? _slabPosts : _slabPosts;
+    final tv = _tv;
+    if (tv != null && !identical(tv.posts, posts)) {
+      tv
+        ..posts = posts
+        ..reset();
+    }
   }
 
   /// Surrounds the current circuit with [environment] in place of the slab.
@@ -393,16 +408,12 @@ class TrackScene implements CameraInput {
     root.add(node);
     _environmentNode = node;
 
-    // Lift any TV camera post that now sits inside a hill or a building,
-    // onto the roof like a real broadcast position.
-    final tv = _tv;
-    if (tv != null) {
-      tv.posts = [
-        for (final p in tv.posts)
-          vm.Vector3(p.x, math.max(p.y, meshes.clearanceAt(p.x, p.z) + 4), p.z),
-      ];
-      tv.reset();
-    }
+    // TV posts that stand clear of the buildings and see past them.
+    _sceneryPosts = TvCameraController.placePosts(
+      builder.stations,
+      TrackProjector(builder.stations),
+      obstacles: meshes.obstacles,
+    );
 
     // Reach the skirts down into the block, so no gap opens under the
     // ribbon where the ground falls away.

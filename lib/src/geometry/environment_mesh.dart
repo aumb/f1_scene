@@ -48,29 +48,32 @@ class EnvironmentMeshBuilder {
     return a + (b - a) * ty;
   }
 
-  /// The height something at ([x], [z]) must stay above to clear both the
-  /// ground and the roof of any building standing there.
-  double clearanceAt(double x, double z) {
-    var top = groundAt(x, z);
-    for (final b in _roofs) {
-      if (b.box.contains(x, z) && _inside(b.ring, x, z)) {
-        top = math.max(top, b.top);
-      }
-    }
-    return top;
-  }
+  /// What blocks a camera's view or stands where it would: this terrain
+  /// and these buildings, as built.
+  late final SceneryObstacles obstacles = SceneryObstacles._(groundAt, _solids);
 
-  late final List<({_Box box, List<Vector2> ring, double top})> _roofs = [
+  /// The buildings that get built: all but those standing on or right next
+  /// to the track (OpenStreetMap footprints are a few meters off at times).
+  late final List<_Solid> _solids = [
     for (final b in environment.buildings)
-      if (_open(b.points) case final ring when ring.length >= 3)
-        (
-          box: _Box.of(ring),
-          ring: ring,
-          top:
-              ring.map((p) => groundAt(p.x, p.y)).reduce(math.min) +
-              (b.height > 0 ? b.height : 8),
-        ),
+      if (_ccw(_open(b.points)) case final ring when ring.length >= 3)
+        if (_centroidClear(ring))
+          () {
+            final ground = ring.map((p) => groundAt(p.x, p.y)).reduce(math.min);
+            return _Solid(
+              ring,
+              _Box.of(ring),
+              ground,
+              ground + (b.height > 0 ? b.height : 8),
+            );
+          }(),
   ];
+
+  bool _centroidClear(List<Vector2> ring) {
+    final c =
+        ring.fold(Vector2.zero(), (s, p) => s + p) / ring.length.toDouble();
+    return _beyondTrack(c.x, c.y, within: 6) >= 6;
+  }
 
   /// Lowest ground height, for sizing the block under it.
   double get lowestGround => _ground.reduce(math.min);
@@ -253,15 +256,7 @@ class EnvironmentMeshBuilder {
     final positions = <double>[], normals = <double>[], colors = <double>[];
     final indices = <int>[];
     final wall = linearColor(0x3C424C), roof = linearColor(0x4B525D);
-    for (final b in environment.buildings) {
-      final ring = _ccw(_open(b.points));
-      if (ring.length < 3) continue;
-      final centroid =
-          ring.fold(Vector2.zero(), (s, p) => s + p) / ring.length.toDouble();
-      if (_beyondTrack(centroid.x, centroid.y, within: 6) < 6) continue;
-      final ground = ring.map((p) => groundAt(p.x, p.y)).reduce(math.min);
-      final top = ground + (b.height > 0 ? b.height : 8);
-
+    for (final _Solid(:ring, :ground, :top) in _solids) {
       for (var i = 0; i < ring.length; i++) {
         final a = ring[i], c = ring[(i + 1) % ring.length];
         final edge = c - a;
@@ -509,6 +504,92 @@ bool _inside(List<Vector2> ring, double x, double z) {
     }
   }
   return inside;
+}
+
+/// A building as built: its footprint (counter-clockwise) and the heights
+/// of its base and flat roof.
+class _Solid {
+  const _Solid(this.ring, this.box, this.ground, this.top);
+
+  final List<Vector2> ring;
+  final _Box box;
+  final double ground;
+  final double top;
+}
+
+/// Where the built scenery blocks a camera: the terrain, and buildings
+/// bucketed on a grid so a sight line only tests the ones it passes.
+class SceneryObstacles {
+  SceneryObstacles._(this._groundAt, this._solids) {
+    for (var i = 0; i < _solids.length; i++) {
+      final box = _solids[i].box;
+      for (var cx = _cell(box.minX); cx <= _cell(box.maxX); cx++) {
+        for (var cz = _cell(box.minZ); cz <= _cell(box.maxZ); cz++) {
+          _grid.putIfAbsent(_key(cx, cz), () => []).add(i);
+        }
+      }
+    }
+  }
+
+  final double Function(double x, double z) _groundAt;
+  final List<_Solid> _solids;
+  final _grid = <int, List<int>>{};
+
+  static const double _cellSize = 40;
+
+  /// Distance between the points a sight line is tested at, in meters.
+  static const double _step = 2.5;
+
+  static int _cell(double v) => (v / _cellSize).floor();
+  static int _key(int cx, int cz) => (cx + 32768) * 65536 + (cz + 32768);
+
+  double groundAt(double x, double z) => _groundAt(x, z);
+
+  /// Whether ([x], [z]) is inside a building or within [margin] of one.
+  bool isBuilt(double x, double z, {double margin = 0}) {
+    for (final (dx, dz) in [
+      (0.0, 0.0),
+      (margin, 0.0),
+      (-margin, 0.0),
+      (0.0, margin),
+      (0.0, -margin),
+    ]) {
+      if (_buildingAt(x + dx, z + dz, double.negativeInfinity) != null) {
+        return true;
+      }
+    }
+    return false;
+  }
+
+  /// Whether the straight line from [from] to [to] clears the terrain and
+  /// every building. The last few meters before [to] are not tested: a
+  /// target on the track stands on ground of its own.
+  bool canSee(Vector3 from, Vector3 to) {
+    final d = to - from;
+    final length = d.length;
+    final steps = ((length - 3) / _step).floor();
+    for (var k = 1; k <= steps; k++) {
+      final f = k * _step / length;
+      final x = from.x + d.x * f, y = from.y + d.y * f, z = from.z + d.z * f;
+      if (y < _groundAt(x, z) - 0.5) return false;
+      if (_buildingAt(x, z, y) != null) return false;
+    }
+    return true;
+  }
+
+  /// The building whose footprint holds ([x], [z]) and whose roof is above
+  /// [below], if any.
+  _Solid? _buildingAt(double x, double z, double below) {
+    final cell = _grid[_key(_cell(x), _cell(z))];
+    if (cell == null) return null;
+    for (final i in cell) {
+      final s = _solids[i];
+      if (below < s.top && s.box.contains(x, z) && _inside(s.ring, x, z)) {
+        return s;
+      }
+    }
+    return null;
+  }
 }
 
 class _Box {

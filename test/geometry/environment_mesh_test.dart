@@ -145,6 +145,43 @@ void main() {
       expect(mesh.triangleCount, 4 * 2 + 2);
     });
 
+    test('sight lines stop at buildings and hills', () {
+      // A 20 m tall block 60 m left of the track at station 500.
+      final c = track.place(500, 60).position;
+      final block = EnvironmentShape('building', [
+        Vector2(c.x - 6, c.z - 6),
+        Vector2(c.x + 6, c.z - 6),
+        Vector2(c.x + 6, c.z + 6),
+        Vector2(c.x - 6, c.z + 6),
+      ], height: 20);
+      final obstacles = EnvironmentMeshBuilder(
+        plateau(buildings: [block]),
+        track,
+      ).obstacles;
+      final ground = obstacles.groundAt(c.x, c.z);
+
+      expect(obstacles.isBuilt(c.x, c.z), isTrue);
+      expect(obstacles.isBuilt(c.x + 8, c.z), isFalse);
+      expect(obstacles.isBuilt(c.x + 8, c.z, margin: 3), isTrue);
+
+      // Straight through the block at half its height, then over its roof.
+      final west = Vector3(c.x - 40, ground + 10, c.z);
+      final east = Vector3(c.x + 40, ground + 10, c.z);
+      expect(obstacles.canSee(west, east), isFalse);
+      expect(
+        obstacles.canSee(west..y = ground + 25, east..y = ground + 25),
+        isTrue,
+      );
+      // Into the 30 m plateau from below it.
+      expect(
+        obstacles.canSee(
+          Vector3(lo + 50, 10, south - 50),
+          Vector3(lo + 250, 10, south - 50),
+        ),
+        isFalse,
+      );
+    });
+
     test('terrain surface faces up', () {
       final mesh = EnvironmentMeshBuilder(plateau(), track).terrainBlock(-50);
       final surfaceTriangles = 126 * 126 * 2; // (64 * 2 - 1) - 1 squared, x2
