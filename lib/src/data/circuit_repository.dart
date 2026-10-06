@@ -26,14 +26,14 @@ class CircuitRepository {
       _json('$_root/layouts/$id.geojson'),
       _json('$_root/elevations/$id.json'),
       _json('$_root/markers/$id.json'),
-      if (summary.hasWidthProfile) _json('$_root/widths/$id.json'),
+      if (summary.hasMeasuredWidth) _json('$_root/widths/$id.json'),
     ]);
     return Circuit.fromJson(
       summary: summary,
       layout: results[0],
       elevation: results[1],
       markers: results[2],
-      width: summary.hasWidthProfile ? results[3] : null,
+      width: summary.hasMeasuredWidth ? results[3] : null,
     );
   }
 

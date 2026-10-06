@@ -134,22 +134,8 @@ AlignmentResult _icp(
   (double, double)? scaleRange,
 }) {
   var current = transform;
-  var rms = double.infinity;
+  var (kept, rms) = _match(source, target, current);
   for (var iteration = 0; iteration < iterations; iteration++) {
-    // Pair each source point with its nearest target point.
-    final pairs = <({double px, double py, double qx, double qy, double d2})>[];
-    for (final (x, y) in source) {
-      final (ax, ay) = current.apply(x, y);
-      final (qx, qy, d2) = _closestOnPath(target, ax, ay);
-      pairs.add((px: x, py: current.mirrored ? -y : y, qx: qx, qy: qy, d2: d2));
-    }
-    // Drop the worst 10%: pit entries, off-track moments, layout changes.
-    pairs.sort((a, b) => a.d2.compareTo(b.d2));
-    final kept = pairs.sublist(0, (pairs.length * 0.9).ceil());
-    final newRms = math.sqrt(
-      kept.fold(0.0, (sum, p) => sum + p.d2) / kept.length,
-    );
-
     // Closed-form 2D similarity (Umeyama) for the kept pairs.
     var mpx = 0.0, mpy = 0.0, mqx = 0.0, mqy = 0.0;
     for (final p in kept) {
@@ -184,11 +170,33 @@ AlignmentResult _icp(
       mirrored: current.mirrored,
     );
 
-    final converged = (rms - newRms).abs() < 1e-6 * math.max(1, newRms);
-    rms = newRms;
-    if (converged) break;
+    final previous = rms;
+    (kept, rms) = _match(source, target, current);
+    if ((previous - rms).abs() < 1e-6 * math.max(1, rms)) break;
   }
   return AlignmentResult(current, rms);
+}
+
+typedef _Pair = ({double px, double py, double qx, double qy, double d2});
+
+/// Pairs each [source] point, placed by [transform], with the closest point
+/// on [target], keeping the best 90%, and their RMS distance.
+(List<_Pair>, double) _match(
+  List<(double, double)> source,
+  PointGrid target,
+  SimilarityTransform2D transform,
+) {
+  final pairs = <_Pair>[];
+  for (final (x, y) in source) {
+    final (ax, ay) = transform.apply(x, y);
+    final (qx, qy, d2) = _closestOnPath(target, ax, ay);
+    pairs.add((px: x, py: transform.mirrored ? -y : y, qx: qx, qy: qy, d2: d2));
+  }
+  // Drop the worst 10%: pit entries, off-track moments, layout changes.
+  pairs.sort((a, b) => a.d2.compareTo(b.d2));
+  final kept = pairs.sublist(0, (pairs.length * 0.9).ceil());
+  final rms = math.sqrt(kept.fold(0.0, (sum, p) => sum + p.d2) / kept.length);
+  return (kept, rms);
 }
 
 /// The closest point to ([x], [y]) on the closed polyline through the grid's
@@ -197,16 +205,17 @@ AlignmentResult _icp(
   final n = path.xs.length;
   final i = path.nearest(x, y).index;
   var best = (path.xs[i], path.ys[i], double.infinity);
-  // The closest point lies on one of the two segments touching vertex i.
+  // With vertices a few meters apart, the closest point is almost always on
+  // a segment touching the nearest vertex.
   for (final (a, b) in [((i - 1 + n) % n, i), (i, (i + 1) % n)]) {
-    final ax = path.xs[a], ay = path.ys[a];
-    final dx = path.xs[b] - ax, dy = path.ys[b] - ay;
-    final length2 = dx * dx + dy * dy;
-    final t = length2 == 0
-        ? 0.0
-        : (((x - ax) * dx + (y - ay) * dy) / length2).clamp(0.0, 1.0);
-    final px = ax + dx * t, py = ay + dy * t;
-    final d2 = (px - x) * (px - x) + (py - y) * (py - y);
+    final (t: _, :px, :py, :d2) = closestOnSegment(
+      path.xs[a],
+      path.ys[a],
+      path.xs[b],
+      path.ys[b],
+      x,
+      y,
+    );
     if (d2 < best.$3) best = (px, py, d2);
   }
   return best;

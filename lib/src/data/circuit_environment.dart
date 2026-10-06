@@ -37,21 +37,23 @@ class TerrainGrid {
   bool isSea(double x, double z) {
     final sea = this.sea;
     if (sea == null) return false;
-    final c = ((x - minX) / (maxX - minX) * (size - 1)).round().clamp(
-      0,
-      size - 1,
-    );
-    final r = ((z - southZ) / (northZ - southZ) * (size - 1)).round().clamp(
-      0,
-      size - 1,
-    );
-    return sea[r * size + c] != 0;
+    final (row, column) = nearestNode(x, z);
+    return sea[row * size + column] != 0;
   }
 
+  /// Scene x of [column] and scene z of [row].
   double nodeX(int column) => minX + (maxX - minX) * column / (size - 1);
   double nodeZ(int row) => southZ + (northZ - southZ) * row / (size - 1);
-  double node(int row, int column) =>
-      heights[row.clamp(0, size - 1) * size + column.clamp(0, size - 1)];
+
+  /// The (row, column) of the node nearest scene ([x], [z]), clamped to the
+  /// grid.
+  (int, int) nearestNode(double x, double z) {
+    int nearest(double f) => (f * (size - 1)).round().clamp(0, size - 1);
+    return (
+      nearest((z - southZ) / (northZ - southZ)),
+      nearest((x - minX) / (maxX - minX)),
+    );
+  }
 
   /// Bilinear height at scene ([x], [z]), clamped to the grid's edges.
   double heightAt(double x, double z) {
@@ -60,6 +62,7 @@ class TerrainGrid {
     final c = math.min(size - 2, fx.floor()),
         r = math.min(size - 2, fy.floor());
     final tx = fx - c, ty = fy - r;
+    double node(int row, int column) => heights[row * size + column];
     final top = node(r, c) + (node(r, c + 1) - node(r, c)) * tx;
     final bottom = node(r + 1, c) + (node(r + 1, c + 1) - node(r + 1, c)) * tx;
     return top + (bottom - top) * ty;
@@ -100,22 +103,23 @@ class CircuitEnvironment {
     required Circuit circuit,
     required Map<String, dynamic> manifest,
     required Map<String, dynamic> terrain,
-    Map<String, dynamic>? surface,
+    required Map<String, dynamic> surface,
     required Map<String, dynamic> water,
     required Map<String, dynamic> landuse,
     required Map<String, dynamic> roads,
     required Map<String, dynamic> buildings,
   }) {
     final projection = circuit.projection;
+    Vector2 point(List lonLat) {
+      final v = projection.project(
+        (lonLat[0] as num).toDouble(),
+        (lonLat[1] as num).toDouble(),
+      );
+      return Vector2(v.x, v.z);
+    }
+
     List<Vector2> points(Object? raw) => [
-      for (final p in (raw as List? ?? const []).cast<List>())
-        () {
-          final v = projection.project(
-            (p[0] as num).toDouble(),
-            (p[1] as num).toDouble(),
-          );
-          return Vector2(v.x, v.z);
-        }(),
+      for (final p in (raw as List? ?? const []).cast<List>()) point(p),
     ];
 
     final bbox = manifest['bbox'] as Map<String, dynamic>;
@@ -138,7 +142,7 @@ class CircuitEnvironment {
       heights: Float64List.fromList([
         for (final h in raw) (h as num).toDouble() - circuit.meanElevation,
       ]),
-      sea: switch (surface?['waterMask']) {
+      sea: switch (surface['waterMask']) {
         final List mask when mask.length == size * size => Uint8List.fromList([
           for (final v in mask) (v as num) > 0 ? 1 : 0,
         ]),

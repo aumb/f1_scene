@@ -28,6 +28,6 @@ Circuit loadCircuit(String id) {
     layout: _read('layouts/$id.geojson'),
     elevation: _read('elevations/$id.json'),
     markers: _read('markers/$id.json'),
-    width: summary.hasWidthProfile ? _read('widths/$id.json') : null,
+    width: summary.hasMeasuredWidth ? _read('widths/$id.json') : null,
   );
 }

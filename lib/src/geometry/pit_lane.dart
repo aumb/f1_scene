@@ -31,8 +31,8 @@ TrackStations? pitLaneFromPath(
   for (final (x, z) in points) {
     final p = track.project(x, z, hint: hint);
     hint = p.station;
-    final (right, left) = track.lateralLimits(p.along);
-    off.add(p.lateral > left + 2 || p.lateral < right - 2);
+    final (:min, :max) = track.lateralLimits(p.along);
+    off.add(p.lateral > max + 2 || p.lateral < min - 2);
   }
   var bestStart = 0, bestEnd = -1;
   for (var i = 0; i < off.length; i++) {
@@ -89,21 +89,18 @@ List<(double, double)> _smooth(
   int radius = 2,
 }) {
   final n = points.length;
-  return [
-    for (var i = 0; i < n; i++)
-      if (i == 0 || i == n - 1)
-        points[i]
-      else
-        () {
-          final r = math.min(radius, math.min(i, n - 1 - i));
-          var x = 0.0, z = 0.0;
-          for (var k = -r; k <= r; k++) {
-            x += points[i + k].$1;
-            z += points[i + k].$2;
-          }
-          return (x / (2 * r + 1), z / (2 * r + 1));
-        }(),
-  ];
+  // The average around point i, narrowing toward the ends.
+  (double, double) averageAt(int i) {
+    final r = math.min(radius, math.min(i, n - 1 - i));
+    var x = 0.0, z = 0.0;
+    for (var k = -r; k <= r; k++) {
+      x += points[i + k].$1;
+      z += points[i + k].$2;
+    }
+    return (x / (2 * r + 1), z / (2 * r + 1));
+  }
+
+  return [for (var i = 0; i < n; i++) averageAt(i)];
 }
 
 /// Points every [spacing] meters along the polyline, keeping both ends.

@@ -14,6 +14,7 @@ import '../race/race_replay.dart';
 import 'cars_layer.dart';
 import 'map_camera.dart';
 import 'race_cameras.dart';
+import '../geometry/mesh_arrays.dart';
 
 enum CameraMode {
   /// Free orbit around the whole circuit.
@@ -308,7 +309,7 @@ class TrackScene implements CameraInput {
 
     final stations = TrackStations.sample(circuit);
     final builder = TrackMeshBuilder(circuit, stations);
-    final baseY = circuit.elevationRange.$1 - _plinth;
+    final baseY = circuit.lowestElevation - _plinth;
 
     final surface = _geometry(builder.surface());
     // Updatable, so the skirts can reach down into terrain that arrives
@@ -338,7 +339,7 @@ class TrackScene implements CameraInput {
           mesh: Mesh(_geometry(builder.startFinishLine()), _lineMaterial),
         )..shadowCastingMode = ShadowCastingMode.off,
       );
-    if (circuit.sectors.length > 1) {
+    if (circuit.sectorStarts.length > 1) {
       root.add(
         Node(
           name: 'sector lines',
@@ -511,12 +512,7 @@ class TrackScene implements CameraInput {
           mesh: Mesh.primitives(
             primitives: [
               MeshPrimitive(
-                _geometry(
-                  ribbonSurface(
-                    pitLane,
-                    uniformRibbonColors(pitLane, linearColor(0x3A3E46)),
-                  ),
-                ),
+                _geometry(ribbonSurface(pitLane, linearColor(0x3A3E46))),
                 _pitMaterial,
               ),
               MeshPrimitive(

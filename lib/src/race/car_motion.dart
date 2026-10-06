@@ -175,8 +175,11 @@ class CarMotion {
     // change slowly, so a straight line through them suffices.
     final (rawLateral, lateralVelocity) = lateralFit.linear();
 
-    final (lo, hi) = projector.lateralLimits(position, margin: carHalfWidth);
-    final lateral = rawLateral.clamp(lo, hi);
+    final (:min, :max) = projector.lateralLimits(
+      position,
+      margin: carHalfWidth,
+    );
+    final lateral = rawLateral.clamp(min, max);
     final placed = projector.place(position, lateral);
 
     final forward = placed.forward;
@@ -216,8 +219,8 @@ class CarMotion {
     final pitLane = this.pitLane;
     PathPoint? pit;
     if (pitLane != null) {
-      final (lo, hi) = track.lateralLimits(onTrack.along);
-      final beyond = math.max(onTrack.lateral - hi, lo - onTrack.lateral);
+      final (:min, :max) = track.lateralLimits(onTrack.along);
+      final beyond = math.max(onTrack.lateral - max, min - onTrack.lateral);
       if (beyond > _pitMinOffTrack) {
         // Only the pit lane within reach matters; an uncapped search from
         // the far side of the circuit walks thousands of grid cells.

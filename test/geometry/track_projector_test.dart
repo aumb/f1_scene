@@ -7,6 +7,8 @@ import 'package:flutter_test/flutter_test.dart';
 
 import '../support/circuits.dart';
 
+import 'package:f1_scene/src/geometry/mesh_arrays.dart';
+
 void main() {
   final stations = TrackStations.sample(loadCircuit('bh-2002'));
   final projector = TrackProjector(stations);
@@ -41,9 +43,9 @@ void main() {
   });
 
   test('lateral limits keep a car inside the edges', () {
-    final (right, left) = projector.lateralLimits(100, margin: 1);
-    expect(left, closeTo(stations.leftOffset[100] - 1, 1e-9));
-    expect(right, closeTo(-(stations.rightOffset[100] - 1), 1e-9));
+    final (:min, :max) = projector.lateralLimits(100, margin: 1);
+    expect(max, closeTo(stations.leftOffset[100] - 1, 1e-9));
+    expect(min, closeTo(-(stations.rightOffset[100] - 1), 1e-9));
   });
 
   group('pit lane from a stop', () {
@@ -104,13 +106,7 @@ void main() {
       closed: false,
     );
     expect(lane.segmentCount, 9);
-    expect(
-      ribbonSurface(
-        lane,
-        uniformRibbonColors(lane, linearColor(0)),
-      ).triangleCount,
-      18,
-    );
+    expect(ribbonSurface(lane, linearColor(0)).triangleCount, 18);
     expect(math.max(lane.leftOffset.first, lane.rightOffset.last), 5);
   });
 }

@@ -4,26 +4,31 @@ import 'dart:typed_data';
 import 'package:vector_math/vector_math.dart';
 
 import '../data/circuit_environment.dart';
-import 'track_mesh.dart';
 import 'track_projector.dart';
+import 'mesh_arrays.dart';
 
 /// Builds the meshes around a circuit from its [CircuitEnvironment].
 ///
-/// The terrain is upsampled and pressed down wherever it would rise through
-/// the track, and everything else (buildings, roads, water, trees) sits on
-/// that adjusted ground. Shapes that would cross the circuit are skipped.
+/// The terrain is upsampled, then cut down or built up to sit just under the
+/// track, and everything else (buildings, roads, water, trees) stands on
+/// that shaped ground. Buildings, roads and trees that would touch the
+/// circuit are left out.
 class EnvironmentMeshBuilder {
-  EnvironmentMeshBuilder(this.environment, this.track) {
-    _buildGround();
+  EnvironmentMeshBuilder(this.environment, this.track)
+    : _ground = _upsample(environment.terrain) {
+    _colors = List.filled(_ground.size * _ground.size, _terrain);
+    _tintGround();
+    _sinkWater();
+    _fitToTrack();
   }
 
   final CircuitEnvironment environment;
   final TrackProjector track;
 
-  /// Terrain nodes per side after upsampling.
-  late final int _size;
-  late final double _minX, _maxX, _southZ, _northZ;
-  late final Float64List _ground;
+  /// The terrain at twice its resolution, shaped to the track.
+  final TerrainGrid _ground;
+
+  /// The ground's colour at each of its nodes.
   late final List<Vector4> _colors;
 
   static final _terrain = linearColor(0x22262D);
@@ -34,49 +39,47 @@ class EnvironmentMeshBuilder {
   static final _sea = linearColor(0x173A4C);
   static final _skirt = linearColor(0x15181D);
 
-  /// Ground height at scene ([x], [z]) after adjusting for the track.
-  double groundAt(double x, double z) {
-    final fx = ((x - _minX) / (_maxX - _minX)).clamp(0.0, 1.0) * (_size - 1);
-    final fy =
-        ((z - _southZ) / (_northZ - _southZ)).clamp(0.0, 1.0) * (_size - 1);
-    final c = math.min(_size - 2, fx.floor()),
-        r = math.min(_size - 2, fy.floor());
-    final tx = fx - c, ty = fy - r;
-    double node(int r, int c) => _ground[r * _size + c];
-    final a = node(r, c) + (node(r, c + 1) - node(r, c)) * tx;
-    final b = node(r + 1, c) + (node(r + 1, c + 1) - node(r + 1, c)) * tx;
-    return a + (b - a) * ty;
-  }
+  /// How the ground meets the track: flat and [_bedDepth] below it out to
+  /// [_runoff] meters past the edge (plus a grid cell), then easing back to
+  /// the real terrain at most [_slope] steep, and untouched beyond [_reach].
+  static const double _bedDepth = 1.5, _runoff = 12, _slope = 0.35;
+  static const double _reach = 150;
+
+  /// Height of a building OpenStreetMap gives none for, meters.
+  static const double _defaultHeight = 8;
+
+  /// Ground height at scene ([x], [z]), as shaped to the track.
+  double groundAt(double x, double z) => _ground.heightAt(x, z);
+
+  /// Lowest ground height, for sizing the block under it.
+  double get lowestGround => _ground.heights.reduce(math.min);
 
   /// What blocks a camera's view or stands where it would: this terrain
   /// and these buildings, as built.
   late final SceneryObstacles obstacles = SceneryObstacles._(groundAt, _solids);
 
-  /// The buildings that get built: all but those standing on or right next
-  /// to the track (OpenStreetMap footprints are a few meters off at times).
+  /// The buildings that get built: all but those touching the track.
   late final List<_Solid> _solids = [
-    for (final b in environment.buildings)
-      if (_ccw(_open(b.points)) case final ring when ring.length >= 3)
-        if (_centroidClear(ring))
-          () {
-            final ground = ring.map((p) => groundAt(p.x, p.y)).reduce(math.min);
-            return _Solid(
-              ring,
-              _Box.of(ring),
-              ground,
-              ground + (b.height > 0 ? b.height : 8),
-            );
-          }(),
+    for (final building in environment.buildings) ?_solidOf(building),
   ];
 
-  bool _centroidClear(List<Vector2> ring) {
-    final c =
-        ring.fold(Vector2.zero(), (s, p) => s + p) / ring.length.toDouble();
-    return _beyondTrack(c.x, c.y, within: 6) >= 6;
+  _Solid? _solidOf(EnvironmentShape building) {
+    final ring = _ccw(_open(building.points));
+    if (ring.length < 3 || !_clearOfTrack(ring)) return null;
+    final ground = ring.map((p) => groundAt(p.x, p.y)).reduce(math.min);
+    final height = building.height > 0 ? building.height : _defaultHeight;
+    return _Solid(ring, _Box.of(ring), ground, ground + height);
   }
 
-  /// Lowest ground height, for sizing the block under it.
-  double get lowestGround => _ground.reduce(math.min);
+  /// Whether a footprint keeps clear of the track: no corner on it, and its
+  /// middle 6 m or more past the edge (OpenStreetMap footprints are a few
+  /// meters off at times).
+  bool _clearOfTrack(List<Vector2> ring) {
+    final middle =
+        ring.fold(Vector2.zero(), (sum, p) => sum + p) / ring.length.toDouble();
+    return _beyondTrack(middle.x, middle.y, within: 6) >= 6 &&
+        ring.every((p) => _beyondTrack(p.x, p.y, within: 1) > 0);
+  }
 
   /// Distance from ([x], [z]) to the nearest track edge, negative on the
   /// track. Only searches as far as [within] past the widest edge; anything
@@ -84,8 +87,14 @@ class EnvironmentMeshBuilder {
   double _beyondTrack(double x, double z, {required double within}) {
     final p = track.projectWithin(x, z, within + _widestHalf);
     if (p == null) return within;
-    final (lo, hi) = track.lateralLimits(p.along);
-    return p.distance - math.max(-lo, hi);
+    return p.distance - _widerHalf(p.along);
+  }
+
+  /// The wider of the two centerline-to-edge distances at [along]: measuring
+  /// from it errs toward keeping clear of the track.
+  double _widerHalf(double along) {
+    final (:min, :max) = track.lateralLimits(along);
+    return math.max(-min, max);
   }
 
   /// The widest centerline-to-edge distance anywhere on the circuit.
@@ -94,153 +103,150 @@ class EnvironmentMeshBuilder {
     ...track.stations.rightOffset,
   ].reduce(math.max);
 
-  void _buildGround() {
-    final grid = environment.terrain;
-    _size = grid.size * 2 - 1;
-    _minX = grid.minX;
-    _maxX = grid.maxX;
-    _southZ = grid.southZ;
-    _northZ = grid.northZ;
-    final n = _size;
-    double nodeX(int c) => _minX + (_maxX - _minX) * c / (n - 1);
-    double nodeZ(int r) => _southZ + (_northZ - _southZ) * r / (n - 1);
-
-    _ground = Float64List(n * n);
-    _colors = List.filled(n * n, _terrain);
+  /// [grid] with a node added between every two, interpolated.
+  static TerrainGrid _upsample(TerrainGrid grid) {
+    final n = grid.size * 2 - 1;
+    final fine = TerrainGrid(
+      size: n,
+      minX: grid.minX,
+      maxX: grid.maxX,
+      southZ: grid.southZ,
+      northZ: grid.northZ,
+      heights: Float64List(n * n),
+    );
     for (var r = 0; r < n; r++) {
       for (var c = 0; c < n; c++) {
-        _ground[r * n + c] = grid.heightAt(nodeX(c), nodeZ(r));
+        fine.heights[r * n + c] = grid.heightAt(fine.nodeX(c), fine.nodeZ(r));
       }
     }
+    return fine;
+  }
 
-    // Visit each shape's nodes through its bounding box, rather than test
-    // every node against every shape (some circuits have thousands).
-    void forNodesInside(List<Vector2> ring, void Function(int node) visit) {
-      if (ring.length < 3) return;
-      final box = _Box.of(ring);
-      int column(double x) => ((x - _minX) / (_maxX - _minX) * (n - 1)).round();
-      int row(double z) =>
-          ((z - _southZ) / (_northZ - _southZ) * (n - 1)).round();
-      final c0 = math.max(0, math.min(column(box.minX), column(box.maxX)));
-      final c1 = math.min(n - 1, math.max(column(box.minX), column(box.maxX)));
-      final r0 = math.max(0, math.min(row(box.minZ), row(box.maxZ)));
-      final r1 = math.min(n - 1, math.max(row(box.minZ), row(box.maxZ)));
-      for (var r = r0; r <= r1; r++) {
-        for (var c = c0; c <= c1; c++) {
-          if (_inside(ring, nodeX(c), nodeZ(r))) visit(r * n + c);
+  /// Calls [visit] with each ground node inside [ring], looking only within
+  /// its bounding box rather than testing every node against every shape
+  /// (some circuits have thousands).
+  void _forNodesInside(List<Vector2> ring, void Function(int node) visit) {
+    if (ring.length < 3) return;
+    final box = _Box.of(ring);
+    final (r0, c0) = _ground.nearestNode(box.minX, box.minZ);
+    final (r1, c1) = _ground.nearestNode(box.maxX, box.maxZ);
+    for (var r = math.min(r0, r1); r <= math.max(r0, r1); r++) {
+      for (var c = math.min(c0, c1); c <= math.max(c0, c1); c++) {
+        if (_inside(ring, _ground.nodeX(c), _ground.nodeZ(r))) {
+          visit(r * _ground.size + c);
         }
       }
     }
+  }
 
-    // The sea, from the coarse flood mask.
+  /// Colours the sea, from the terrain's coarse flood mask, and tints the
+  /// land by use; woods win over other uses.
+  void _tintGround() {
+    final n = _ground.size;
     for (var r = 0; r < n; r++) {
       for (var c = 0; c < n; c++) {
-        if (grid.isSea(nodeX(c), nodeZ(r))) _colors[r * n + c] = _sea;
+        if (environment.terrain.isSea(_ground.nodeX(c), _ground.nodeZ(r))) {
+          _colors[r * n + c] = _sea;
+        }
       }
     }
-
-    // Land use tints the ground; woods win over other uses.
     for (final shape in environment.landuse) {
       final color = switch (shape.kind) {
         'wood' || 'forest' => _wood,
         'grass' || 'park' || 'meadow' => _grass,
         _ => _built,
       };
-      forNodesInside(shape.points, (i) {
+      _forNodesInside(shape.points, (i) {
         if (_colors[i] != _wood) _colors[i] = color;
       });
     }
-    // Water bodies sit at the lowest terrain along their shore.
+  }
+
+  /// Sinks the ground under each lake and river a little below its surface.
+  void _sinkWater() {
     for (final w in environment.water) {
       if (w.points.isEmpty) continue;
-      final level = w.points
-          .map((p) => grid.heightAt(p.x, p.y))
-          .reduce(math.min);
-      forNodesInside(w.points, (i) {
-        _ground[i] = math.min(_ground[i], level - 0.5);
+      final level = _waterLevel(w.points);
+      _forNodesInside(w.points, (i) {
+        _ground.heights[i] = math.min(_ground.heights[i], level - 0.5);
         _colors[i] = _waterBed;
       });
     }
+  }
 
-    // Shape the ground to the track: cut it down where it would rise
-    // through the ribbon, build it up where it falls away below, and ease
-    // back to the real terrain away from the edge. The bed stays flat for a
-    // whole cell past the edge, because the surface between nodes
-    // interpolates and a sloping node any closer could lift it over the
-    // track. Beyond 150 m the terrain is left alone.
+  /// A body of water's surface: at the lowest real terrain along its shore.
+  double _waterLevel(List<Vector2> shore) =>
+      shore.map((p) => environment.terrain.heightAt(p.x, p.y)).reduce(math.min);
+
+  /// Shapes the ground to the track: cuts it down where it would rise
+  /// through the ribbon, builds it up where it falls away below, and eases
+  /// back to the real terrain away from the edge.
+  void _fitToTrack() {
+    final n = _ground.size;
+    // The flat bed reaches a whole cell further, because the surface between
+    // nodes interpolates: a sloping node any closer could lift it over the
+    // track.
     final cell = math.sqrt(
-      math.pow((_maxX - _minX) / (n - 1), 2) +
-          math.pow((_northZ - _southZ) / (n - 1), 2),
+      math.pow(_ground.nodeX(1) - _ground.nodeX(0), 2) +
+          math.pow(_ground.nodeZ(1) - _ground.nodeZ(0), 2),
     );
-    final flat = 12 + cell;
-    const slope = 0.35;
     for (var r = 0; r < n; r++) {
       for (var c = 0; c < n; c++) {
-        final p = track.projectWithin(nodeX(c), nodeZ(r), 150 + _widestHalf);
+        final x = _ground.nodeX(c), z = _ground.nodeZ(r);
+        final p = track.projectWithin(x, z, _reach + _widestHalf);
         if (p == null) continue;
-        final (lo, hi) = track.lateralLimits(p.along);
-        final beyond = p.distance - math.max(-lo, hi);
-        final bed = track.stations.center[p.station].y - 1.5;
-        final give = math.max(0.0, beyond - flat) * slope;
+        final beyond = p.distance - _widerHalf(p.along);
+        final bed = track.stations.center[p.station].y - _bedDepth;
+        final give = math.max(0.0, beyond - _runoff - cell) * _slope;
         final i = r * n + c;
-        _ground[i] = _ground[i].clamp(bed - give, bed + give);
+        _ground.heights[i] = _ground.heights[i].clamp(bed - give, bed + give);
       }
     }
   }
 
   /// The terrain surface plus skirts down to [baseY], one diorama block.
   MeshArrays terrainBlock(double baseY) {
-    final n = _size;
-    final positions = <double>[], normals = <double>[], colors = <double>[];
-    final indices = <int>[];
-    double nodeX(int c) => _minX + (_maxX - _minX) * c / (n - 1);
-    double nodeZ(int r) => _southZ + (_northZ - _southZ) * r / (n - 1);
-
-    void vertex(Vector3 p, Vector3 normal, Vector4 color) {
-      positions.addAll([p.x, p.y, p.z]);
-      normals.addAll([normal.x, normal.y, normal.z]);
-      colors.addAll([color.x, color.y, color.z, color.w]);
-    }
+    final n = _ground.size;
+    final mesh = MeshBuilder();
+    final dx = _ground.nodeX(1) - _ground.nodeX(0);
+    final dz = _ground.nodeZ(1) - _ground.nodeZ(0);
+    double h(int r, int c) =>
+        _ground.heights[r.clamp(0, n - 1) * n + c.clamp(0, n - 1)];
+    Vector3 node(int r, int c) =>
+        Vector3(_ground.nodeX(c), h(r, c), _ground.nodeZ(r));
 
     // Surface, with normals from the height differences.
     for (var r = 0; r < n; r++) {
       for (var c = 0; c < n; c++) {
-        double h(int rr, int cc) =>
-            _ground[rr.clamp(0, n - 1) * n + cc.clamp(0, n - 1)];
-        final dx = nodeX(1) - nodeX(0), dz = nodeZ(1) - nodeZ(0);
         final normal = Vector3(
           -(h(r, c + 1) - h(r, c - 1)) / (2 * dx),
           1,
           -(h(r + 1, c) - h(r - 1, c)) / (2 * dz),
         )..normalize();
-        vertex(
-          Vector3(nodeX(c), _ground[r * n + c], nodeZ(r)),
-          normal,
-          _colors[r * n + c],
-        );
+        mesh.vertex(node(r, c), normal, color: _colors[r * n + c]);
       }
     }
+    final up = Vector3(0, 1, 0);
     for (var r = 0; r + 1 < n; r++) {
       for (var c = 0; c + 1 < n; c++) {
         final v00 = r * n + c, v01 = v00 + 1, v10 = v00 + n, v11 = v10 + 1;
-        // Rows run north (+Z), columns east (+X): this order faces up.
-        indices.addAll([v00, v10, v01, v01, v10, v11]);
+        mesh.quadFacing(v01, v11, v10, v00, up);
       }
     }
 
     // Skirts around the four edges, facing out.
     void skirt(List<(int, int)> nodes, Vector3 outward) {
       for (var k = 0; k + 1 < nodes.length; k++) {
-        final (r0, c0) = nodes[k];
-        final (r1, c1) = nodes[k + 1];
-        final a = Vector3(nodeX(c0), _ground[r0 * n + c0], nodeZ(r0));
-        final b = Vector3(nodeX(c1), _ground[r1 * n + c1], nodeZ(r1));
-        final v = positions.length ~/ 3;
-        vertex(a, outward, _skirt);
-        vertex(b, outward, _skirt);
-        vertex(Vector3(b.x, baseY, b.z), outward, _skirt);
-        vertex(Vector3(a.x, baseY, a.z), outward, _skirt);
-        _addQuad(indices, positions, v, v + 1, v + 2, v + 3, outward);
+        final a = node(nodes[k].$1, nodes[k].$2);
+        final b = node(nodes[k + 1].$1, nodes[k + 1].$2);
+        mesh.flatQuad(
+          a,
+          b,
+          Vector3(b.x, baseY, b.z),
+          Vector3(a.x, baseY, a.z),
+          outward,
+          color: _skirt,
+        );
       }
     }
 
@@ -248,59 +254,48 @@ class EnvironmentMeshBuilder {
     skirt([for (var c = 0; c < n; c++) (n - 1, c)], Vector3(0, 0, 1)); // north
     skirt([for (var r = 0; r < n; r++) (r, 0)], Vector3(-1, 0, 0)); // west
     skirt([for (var r = 0; r < n; r++) (r, n - 1)], Vector3(1, 0, 0)); // east
-    return _arrays(positions, normals, colors, indices);
+    return mesh.build();
   }
 
   /// Every building extruded from the ground, roofs flat.
   MeshArrays buildings() {
-    final positions = <double>[], normals = <double>[], colors = <double>[];
-    final indices = <int>[];
+    final mesh = MeshBuilder();
     final wall = linearColor(0x3C424C), roof = linearColor(0x4B525D);
+    final up = Vector3(0, 1, 0);
     for (final _Solid(:ring, :ground, :top) in _solids) {
       for (var i = 0; i < ring.length; i++) {
         final a = ring[i], c = ring[(i + 1) % ring.length];
         final edge = c - a;
         if (edge.length2 < 1e-4) continue;
+        // The ring runs counter-clockwise in (x, z), so outside is to the
+        // right of each edge.
         final outward = Vector3(edge.y, 0, -edge.x)..normalize();
-        final v = positions.length ~/ 3;
-        for (final p in [
+        mesh.flatQuad(
           Vector3(a.x, ground, a.y),
           Vector3(c.x, ground, c.y),
           Vector3(c.x, top, c.y),
           Vector3(a.x, top, a.y),
-        ]) {
-          positions.addAll([p.x, p.y, p.z]);
-          normals.addAll([outward.x, 0, outward.z]);
-          colors.addAll([wall.x, wall.y, wall.z, 1]);
-        }
-        _addQuad(indices, positions, v, v + 1, v + 2, v + 3, outward);
-      }
-      final base = positions.length ~/ 3;
-      for (final p in ring) {
-        positions.addAll([p.x, top, p.y]);
-        normals.addAll([0, 1, 0]);
-        colors.addAll([roof.x, roof.y, roof.z, 1]);
-      }
-      for (final t in triangulate(ring)) {
-        _addTriangleFacing(
-          indices,
-          positions,
-          base + t.$1,
-          base + t.$2,
-          base + t.$3,
-          Vector3(0, 1, 0),
+          outward,
+          color: wall,
         );
       }
+      final base = mesh.vertexCount;
+      for (final p in ring) {
+        mesh.vertex(Vector3(p.x, top, p.y), up, color: roof);
+      }
+      for (final (a, b, c) in triangulate(ring)) {
+        mesh.triangleFacing(base + a, base + b, base + c, up);
+      }
     }
-    return _arrays(positions, normals, colors, indices);
+    return mesh.build();
   }
 
   /// Roads as ribbons draped over the ground, broken where they would cross
   /// the circuit. Footpaths and race tracks are left out.
   MeshArrays roads() {
-    final positions = <double>[], normals = <double>[], colors = <double>[];
-    final indices = <int>[];
+    final mesh = MeshBuilder();
     final color = linearColor(0x363B43);
+    final up = Vector3(0, 1, 0);
     for (final road in environment.roads) {
       final width = _roadWidth(road.kind);
       if (width == null) continue;
@@ -328,72 +323,50 @@ class EnvironmentMeshBuilder {
         if (direction.length2 < 1e-6) continue;
         direction.normalize();
         final side = Vector2(direction.y, -direction.x) * (width / 2);
-        final v = positions.length ~/ 3;
+        final v = mesh.vertexCount;
         for (final q in [p + side, p - side]) {
-          positions.addAll([q.x, groundAt(q.x, q.y) + 0.25, q.y]);
-          normals.addAll([0, 1, 0]);
-          colors.addAll([color.x, color.y, color.z, 1]);
+          mesh.vertex(
+            Vector3(q.x, groundAt(q.x, q.y) + 0.25, q.y),
+            up,
+            color: color,
+          );
         }
         if (previous >= 0) {
-          _addTriangleFacing(
-            indices,
-            positions,
-            previous,
-            previous + 1,
-            v,
-            Vector3(0, 1, 0),
-          );
-          _addTriangleFacing(
-            indices,
-            positions,
-            previous + 1,
-            v + 1,
-            v,
-            Vector3(0, 1, 0),
-          );
+          mesh.quadFacing(previous, previous + 1, v + 1, v, up);
         }
         previous = v;
       }
     }
-    return _arrays(positions, normals, colors, indices);
+    return mesh.build();
   }
 
   /// Lakes, rivers and sea as flat surfaces at their shore's lowest ground.
   MeshArrays water() {
-    final positions = <double>[], normals = <double>[], colors = <double>[];
-    final indices = <int>[];
+    final mesh = MeshBuilder();
     final color = linearColor(0x1B4A60);
+    final up = Vector3(0, 1, 0);
     for (final w in environment.water) {
       final ring = _ccw(_open(w.points));
       if (ring.length < 3) continue;
-      final level =
-          ring
-              .map((p) => environment.terrain.heightAt(p.x, p.y))
-              .reduce(math.min) +
-          0.05;
-      final base = positions.length ~/ 3;
+      final level = _waterLevel(ring) + 0.05;
+      final base = mesh.vertexCount;
       for (final p in ring) {
-        positions.addAll([p.x, level, p.y]);
-        normals.addAll([0, 1, 0]);
-        colors.addAll([color.x, color.y, color.z, 1]);
+        mesh.vertex(Vector3(p.x, level, p.y), up, color: color);
       }
-      for (final t in triangulate(ring)) {
-        _addTriangleFacing(
-          indices,
-          positions,
-          base + t.$1,
-          base + t.$2,
-          base + t.$3,
-          Vector3(0, 1, 0),
-        );
+      for (final (a, b, c) in triangulate(ring)) {
+        mesh.triangleFacing(base + a, base + b, base + c, up);
       }
     }
-    return _arrays(positions, normals, colors, indices);
+    return mesh.build();
   }
 
-  /// Tree positions scattered through woodland, about one per [spacing]
+  /// Tree positions scattered through woodland, about one per [areaPerTree]
   /// square meters, at most [limit].
-  List<Vector3> trees({double spacing = 260, int limit = 3000, int seed = 7}) {
+  List<Vector3> trees({
+    double areaPerTree = 260,
+    int limit = 3000,
+    int seed = 7,
+  }) {
     final random = math.Random(seed);
     final out = <Vector3>[];
     for (final shape in environment.landuse) {
@@ -401,7 +374,7 @@ class EnvironmentMeshBuilder {
       final ring = _open(shape.points);
       if (ring.length < 3) continue;
       final box = _Box.of(ring);
-      final wanted = (_area(ring).abs() / spacing).round();
+      final wanted = (_area(ring).abs() / areaPerTree).round();
       var placed = 0, attempts = 0;
       while (placed < wanted && attempts < wanted * 4 && out.length < limit) {
         attempts++;
@@ -613,49 +586,3 @@ class _Box {
   bool contains(double x, double z) =>
       x >= minX && x <= maxX && z >= minZ && z <= maxZ;
 }
-
-/// Adds quad [a]-[b]-[c]-[d] (in order around it) facing [normal].
-void _addQuad(
-  List<int> indices,
-  List<double> positions,
-  int a,
-  int b,
-  int c,
-  int d,
-  Vector3 normal,
-) {
-  _addTriangleFacing(indices, positions, a, b, c, normal);
-  _addTriangleFacing(indices, positions, a, c, d, normal);
-}
-
-/// Adds triangle [a], [b], [c], wound so it faces [normal].
-void _addTriangleFacing(
-  List<int> indices,
-  List<double> positions,
-  int a,
-  int b,
-  int c,
-  Vector3 normal,
-) {
-  Vector3 at(int i) =>
-      Vector3(positions[i * 3], positions[i * 3 + 1], positions[i * 3 + 2]);
-  final pa = at(a);
-  final face = (at(b) - pa).cross(at(c) - pa);
-  if (face.dot(normal) >= 0) {
-    indices.addAll([a, b, c]);
-  } else {
-    indices.addAll([a, c, b]);
-  }
-}
-
-MeshArrays _arrays(
-  List<double> positions,
-  List<double> normals,
-  List<double> colors,
-  List<int> indices,
-) => MeshArrays(
-  positions: Float32List.fromList(positions),
-  normals: Float32List.fromList(normals),
-  colors: Float32List.fromList(colors),
-  indices: Uint32List.fromList(indices),
-);

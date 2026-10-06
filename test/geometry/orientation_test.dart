@@ -14,6 +14,13 @@ void main() {
     expect(projection.project(0, 45.001).z, greaterThan(0));
   });
 
+  test('measures a degree as the WGS84 ellipsoid does', () {
+    // At 45°, a degree of latitude is 111,132 m and of longitude 78,847 m.
+    final projection = LocalProjection(0, 45);
+    expect(projection.project(0, 46).z, closeTo(111132, 50));
+    expect(projection.project(1, 45).x, closeTo(78847, 5));
+  });
+
   test('left of north is west', () {
     final left = leftOf(Vector3(0, 0, 1));
     expect(left.x, closeTo(-1, 1e-9));

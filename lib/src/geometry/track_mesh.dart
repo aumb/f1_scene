@@ -1,44 +1,9 @@
 import 'dart:math' as math;
-import 'dart:typed_data';
 
 import 'package:vector_math/vector_math.dart';
 
 import '../data/circuit.dart';
-
-/// Raw triangle-list mesh arrays, independent of any renderer.
-///
-/// Every mesh here winds its triangles so that (b − a) × (c − a) points out
-/// of the side meant to be seen.
-class MeshArrays {
-  MeshArrays({
-    required this.positions,
-    required this.normals,
-    required this.indices,
-    this.colors,
-    this.texCoords,
-  });
-
-  final Float32List positions;
-  final Float32List normals;
-  final Float32List? colors;
-  final Float32List? texCoords;
-  final Uint32List indices;
-
-  int get vertexCount => positions.length ~/ 3;
-  int get triangleCount => indices.length ~/ 3;
-}
-
-/// Linear-space RGBA from an sRGB `0xRRGGBB` value.
-Vector4 linearColor(int rgb, [double alpha = 1]) {
-  double channel(int shift) {
-    final c = ((rgb >> shift) & 0xff) / 255;
-    return c <= 0.04045
-        ? c / 12.92
-        : math.pow((c + 0.055) / 1.055, 2.4).toDouble();
-  }
-
-  return Vector4(channel(16), channel(8), channel(0), alpha);
-}
+import 'mesh_arrays.dart';
 
 /// The level direction to the left of [forward].
 ///
@@ -56,7 +21,6 @@ double leftTurn(Vector3 a, Vector3 b) => math.atan2(b.cross(a).y, a.dot(b));
 /// pit lane), shared by every mesh and lookup that follows it.
 class TrackStations {
   TrackStations._(
-    this.s,
     this.center,
     this.forward,
     this.left,
@@ -64,6 +28,7 @@ class TrackStations {
     this.leftOffset,
     this.rightOffset,
     this.closed,
+    this.spacing,
   );
 
   /// Samples [circuit] about every [spacing] meters.
@@ -75,17 +40,14 @@ class TrackStations {
       [for (final v in s) line.pointAt(v)],
       [for (final v in s) circuit.widthAt(v) / 2],
       closed: true,
-      s: s,
     );
   }
 
-  /// Cross-sections through evenly spaced [center] points. [s] defaults to
-  /// each station's fraction of the path.
+  /// Cross-sections through evenly spaced [center] points.
   factory TrackStations.fromPath(
     List<Vector3> center,
     List<double> halfWidth, {
     required bool closed,
-    List<double>? s,
   }) {
     final count = center.length;
     int at(int i) => closed ? (i + count) % count : i.clamp(0, count - 1);
@@ -129,7 +91,6 @@ class TrackStations {
     }
 
     return TrackStations._(
-      s ?? [for (var i = 0; i < count; i++) i / (closed ? count : count - 1)],
       center,
       forward,
       left,
@@ -137,10 +98,10 @@ class TrackStations {
       offsets(leftLimit),
       offsets(rightLimit),
       closed,
+      step,
     );
   }
 
-  final List<double> s;
   final List<Vector3> center;
   final List<Vector3> forward;
   final List<Vector3> left;
@@ -156,7 +117,10 @@ class TrackStations {
   /// Whether the last station connects back to the first.
   final bool closed;
 
-  int get length => s.length;
+  /// Average distance between neighbouring stations, meters.
+  final double spacing;
+
+  int get length => center.length;
 
   /// Number of spans between stations.
   int get segmentCount => closed ? length : length - 1;
@@ -205,127 +169,46 @@ class TrackStations {
   }
 }
 
-/// A flat ribbon across [stations] between their edges, colored per station
-/// by [colors] (linear RGBA, two vertices per station).
-MeshArrays ribbonSurface(TrackStations stations, Float32List colors) {
-  final n = stations.length;
-  final positions = Float32List(n * 2 * 3);
-  final normals = Float32List(n * 2 * 3);
-  final indices = Uint32List(stations.segmentCount * 6);
-
-  for (var i = 0; i < n; i++) {
-    // Surface normal: +Y on level ground, tilted with the slope.
-    final normal = stations.up(i);
-    _put3(positions, i * 2, stations.leftEdge(i));
-    _put3(positions, i * 2 + 1, stations.rightEdge(i));
-    _put3(normals, i * 2, normal);
-    _put3(normals, i * 2 + 1, normal);
+/// A flat ribbon across [stations] between their edges, in one linear RGBA
+/// [color].
+MeshArrays ribbonSurface(TrackStations stations, Vector4 color) {
+  final mesh = MeshBuilder();
+  for (var i = 0; i < stations.length; i++) {
+    final up = stations.up(i);
+    mesh
+      ..vertex(stations.leftEdge(i), up, color: color)
+      ..vertex(stations.rightEdge(i), up, color: color);
   }
   for (var i = 0; i < stations.segmentCount; i++) {
-    // Wound to face up (see [MeshArrays]; verified in track_mesh_test).
     final l0 = i * 2, r0 = l0 + 1;
-    final l1 = ((i + 1) % n) * 2, r1 = l1 + 1;
-    indices.setAll(i * 6, [l0, l1, r0, r0, l1, r1]);
+    final l1 = ((i + 1) % stations.length) * 2, r1 = l1 + 1;
+    mesh.quadFacing(l0, r0, r1, l1, stations.up(i));
   }
-  return MeshArrays(
-    positions: positions,
-    normals: normals,
-    colors: colors,
-    indices: indices,
-  );
+  return mesh.build();
 }
 
 /// Vertical skirts from both edges of [stations] down to [baseY], so a
 /// ribbon reads as a solid extrusion sitting on the diorama base.
 MeshArrays ribbonSkirts(TrackStations stations, double baseY) {
-  final n = stations.length;
-  // Per side and station: a top and a bottom vertex.
-  final positions = Float32List(n * 4 * 3);
-  final normals = Float32List(n * 4 * 3);
-  final indices = Uint32List(stations.segmentCount * 12);
-
-  for (var i = 0; i < n; i++) {
+  final mesh = MeshBuilder();
+  // Per station: the left edge's top and bottom, then the right's.
+  for (var i = 0; i < stations.length; i++) {
     final left = stations.left[i];
-    final right = -left;
-    final lTop = stations.leftEdge(i), rTop = stations.rightEdge(i);
-    final base = i * 4;
-    _put3(positions, base, lTop);
-    _put3(positions, base + 1, Vector3(lTop.x, baseY, lTop.z));
-    _put3(positions, base + 2, rTop);
-    _put3(positions, base + 3, Vector3(rTop.x, baseY, rTop.z));
-    _put3(normals, base, left);
-    _put3(normals, base + 1, left);
-    _put3(normals, base + 2, right);
-    _put3(normals, base + 3, right);
+    final l = stations.leftEdge(i), r = stations.rightEdge(i);
+    mesh
+      ..vertex(l, left)
+      ..vertex(Vector3(l.x, baseY, l.z), left)
+      ..vertex(r, -left)
+      ..vertex(Vector3(r.x, baseY, r.z), -left);
   }
   for (var i = 0; i < stations.segmentCount; i++) {
-    final base = i * 4, next = ((i + 1) % n) * 4;
-    final lt0 = base, lb0 = base + 1, rt0 = base + 2, rb0 = base + 3;
-    final lt1 = next, lb1 = next + 1, rt1 = next + 2, rb1 = next + 3;
-    indices.setAll(i * 12, [
-      // Left skirt faces +left.
-      lb0, lb1, lt0, lt0, lb1, lt1,
-      // Right skirt faces -left.
-      rb0, rt0, rb1, rt0, rt1, rb1,
-    ]);
+    final a = i * 4, b = ((i + 1) % stations.length) * 4;
+    final left = stations.left[i];
+    mesh
+      ..quadFacing(a, a + 1, b + 1, b, left)
+      ..quadFacing(a + 2, a + 3, b + 3, b + 2, -left);
   }
-  return MeshArrays(positions: positions, normals: normals, indices: indices);
-}
-
-/// Two vertices' worth of [color] per station, for [ribbonSurface].
-Float32List uniformRibbonColors(TrackStations stations, Vector4 color) {
-  final colors = Float32List(stations.length * 2 * 4);
-  for (var v = 0; v < stations.length * 2; v++) {
-    _put4(colors, v, color);
-  }
-  return colors;
-}
-
-/// Collects flat coloured quads, each with its own vertices so colours stay
-/// crisp. Corners come left, right, next-left, next-right (relative to the
-/// direction of travel), which winds them to face up.
-class _Quads {
-  final _positions = <double>[];
-  final _normals = <double>[];
-  final _colors = <double>[];
-  final _indices = <int>[];
-
-  void add(
-    Vector3 left,
-    Vector3 right,
-    Vector3 nextLeft,
-    Vector3 nextRight,
-    Vector3 normal,
-    Vector4 color,
-  ) {
-    final v = _positions.length ~/ 3;
-    for (final p in [left, right, nextLeft, nextRight]) {
-      _positions.addAll([p.x, p.y, p.z]);
-      _normals.addAll([normal.x, normal.y, normal.z]);
-      _colors.addAll([color.x, color.y, color.z, color.w]);
-    }
-    _indices.addAll([v, v + 2, v + 1, v + 1, v + 2, v + 3]);
-  }
-
-  MeshArrays build() => MeshArrays(
-    positions: Float32List.fromList(_positions),
-    normals: Float32List.fromList(_normals),
-    colors: Float32List.fromList(_colors),
-    indices: Uint32List.fromList(_indices),
-  );
-}
-
-void _put3(Float32List list, int vertex, Vector3 v) {
-  list[vertex * 3] = v.x;
-  list[vertex * 3 + 1] = v.y;
-  list[vertex * 3 + 2] = v.z;
-}
-
-void _put4(Float32List list, int vertex, Vector4 v) {
-  list[vertex * 4] = v.x;
-  list[vertex * 4 + 1] = v.y;
-  list[vertex * 4 + 2] = v.z;
-  list[vertex * 4 + 3] = v.w;
+  return mesh.build();
 }
 
 /// Builds the meshes that make up a circuit diorama.
@@ -341,10 +224,7 @@ class TrackMeshBuilder {
   static const surfaceColor = 0xC8CDD5;
 
   /// The driving surface across the full track width.
-  MeshArrays surface() => ribbonSurface(
-    stations,
-    uniformRibbonColors(stations, linearColor(surfaceColor)),
-  );
+  MeshArrays surface() => ribbonSurface(stations, linearColor(surfaceColor));
 
   /// Skirts under both track edges down to [baseY].
   MeshArrays skirts(double baseY) => ribbonSkirts(stations, baseY);
@@ -363,10 +243,10 @@ class TrackMeshBuilder {
 
   /// Thin lines across the track where each sector after the first starts.
   MeshArrays sectorLines() {
-    final quads = _Quads();
-    for (final sector in circuit.sectors.skip(1)) {
+    final quads = MeshBuilder();
+    for (final start in circuit.sectorStarts.skip(1)) {
       _crossLine(
-        circuit.sAtLapDistance(sector.fromDistance),
+        circuit.sAtLapDistance(start),
         length: 1.0,
         rows: 1,
         columns: 1,
@@ -387,27 +267,36 @@ class TrackMeshBuilder {
     double exitRadius = 70,
   }) {
     final n = stations.length;
-    final step = circuit.centerline.length / n;
+    final step = stations.spacing;
     int at(int i) => (i % n + n) % n;
+    int stationsIn(double meters) => math.max(1, (meters / step).round());
 
-    // Signed curvature (positive turns left), smoothed over ~14 m.
+    // Signed curvature (positive turns left): the turn between directions
+    // 4 m either side, averaged over ~14 m.
+    final reach = stationsIn(4), blur = stationsIn(6);
     final raw = [
       for (var i = 0; i < n; i++)
-        leftTurn(stations.left[at(i - 2)], stations.left[at(i + 2)]) /
-            (4 * step),
+        leftTurn(stations.left[at(i - reach)], stations.left[at(i + reach)]) /
+            (2 * reach * step),
     ];
     final curvature = [
       for (var i = 0; i < n; i++)
-        [for (var k = -3; k <= 3; k++) raw[at(i + k)]].reduce((x, y) => x + y) /
-            7,
+        [for (var k = -blur; k <= blur; k++) raw[at(i + k)]]
+                .reduce((x, y) => x + y) /
+            (2 * blur + 1),
     ];
+
+    // Corners shorter than this get no kerbs. Kerbs start and end a little
+    // either side of their corner, and an exit kerb runs on past it.
+    final minCorner = stationsIn(8);
+    final lead = stationsIn(4), runout = stationsIn(16);
 
     // Start scanning on a straight so no corner straddles index 0.
     var origin = 0;
     while (origin < n && curvature[origin].abs() > 1 / cornerRadius) {
       origin++;
     }
-    final quads = _Quads();
+    final quads = MeshBuilder();
     final red = linearColor(0xD7262E), white = linearColor(0xEDEDED);
     void kerb(int from, int to, double side) {
       for (var k = from; k < to; k++) {
@@ -416,17 +305,18 @@ class TrackMeshBuilder {
             side > 0 ? stations.leftEdge(s) : stations.rightEdge(s);
         double offset(int s) =>
             side > 0 ? stations.leftOffset[s] : stations.rightOffset[s];
+        // Narrow tracks get narrower kerbs, so some asphalt shows.
         Vector3 inner(int s) =>
             edge(s) -
             stations.left[s] * (side * math.min(width, offset(s) * 0.4));
-        final normal = stations.up(i);
-        final color = k.isEven ? red : white;
-        // Corners ordered left, right, next-left, next-right.
-        if (side > 0) {
-          quads.add(edge(i), inner(i), edge(j), inner(j), normal, color);
-        } else {
-          quads.add(inner(i), edge(i), inner(j), edge(j), normal, color);
-        }
+        quads.flatQuad(
+          edge(i),
+          inner(i),
+          inner(j),
+          edge(j),
+          stations.up(i),
+          color: k.isEven ? red : white,
+        );
       }
     }
 
@@ -445,12 +335,12 @@ class TrackMeshBuilder {
         if (curvature[at(end)].abs() > curvature[at(apex)].abs()) apex = end;
         end++;
       }
-      if (end - k >= 4) {
-        // Inside of the corner, a little either side of it.
-        kerb(k - 2, end + 2, sign);
+      if (end - k >= minCorner) {
+        // Inside of the corner.
+        kerb(k - lead, end + lead, sign);
         if (curvature[at(apex)].abs() > 1 / exitRadius) {
           // Outside of the exit, from the apex out.
-          kerb(apex, end + 8, -sign);
+          kerb(apex, end + runout, -sign);
         }
       }
       k = end;
@@ -462,7 +352,7 @@ class TrackMeshBuilder {
   /// stations, wrapping past the seam when start > end.
   MeshArrays drsBands(List<(double, double)> spans, {double fraction = 0.35}) {
     final n = stations.length;
-    final quads = _Quads();
+    final quads = MeshBuilder();
     final color = linearColor(0x2BD96A);
     for (final (start, end) in spans) {
       final length = (end - start) % n;
@@ -475,14 +365,13 @@ class TrackMeshBuilder {
                     fraction *
                     (stations.leftOffset[s] + stations.rightOffset[s]) /
                     2);
-        final normal = stations.up(i);
-        quads.add(
+        quads.flatQuad(
           side(i, 1),
           side(i, -1),
-          side(j, 1),
           side(j, -1),
-          normal,
-          color,
+          side(j, 1),
+          stations.up(i),
+          color: color,
         );
       }
     }
@@ -496,9 +385,9 @@ class TrackMeshBuilder {
     required int rows,
     required int columns,
     required Vector4 Function(int row, int column) colorAt,
-    _Quads? into,
+    MeshBuilder? into,
   }) {
-    final quads = into ?? _Quads();
+    final quads = into ?? MeshBuilder();
     final center = circuit.centerline.pointAt(s);
     final forward = circuit.centerline.tangentAt(s);
     final left = leftOf(forward);
@@ -512,13 +401,13 @@ class TrackMeshBuilder {
       for (var c = 0; c < columns; c++) {
         final along0 = -length / 2 + r * cellLength;
         final across0 = halfWidth - c * cellWidth;
-        quads.add(
+        quads.flatQuad(
           corner(along0, across0),
           corner(along0, across0 - cellWidth),
-          corner(along0 + cellLength, across0),
           corner(along0 + cellLength, across0 - cellWidth),
+          corner(along0 + cellLength, across0),
           normal,
-          colorAt(r, c),
+          color: colorAt(r, c),
         );
       }
     }

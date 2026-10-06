@@ -5,11 +5,11 @@ import 'package:flutter_scene/scene.dart';
 import 'package:vector_math/vector_math.dart' as vm;
 
 import '../geometry/car_mesh.dart';
-import '../geometry/track_mesh.dart';
 import '../race/car_motion.dart';
 import '../race/liveries.dart';
 import '../race/race_models.dart';
 import '../race/traffic.dart';
+import '../geometry/mesh_arrays.dart';
 
 /// One car model per driver, posed from replay poses every frame.
 ///

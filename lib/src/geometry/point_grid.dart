@@ -78,3 +78,23 @@ class PointGrid {
     return (index: best, distanceSquared: bestD2);
   }
 }
+
+/// The point on the segment from ([ax], [ay]) to ([bx], [by]) closest to
+/// ([x], [y]): its fraction `t` of the way along, its position, and its
+/// squared distance.
+({double t, double px, double py, double d2}) closestOnSegment(
+  double ax,
+  double ay,
+  double bx,
+  double by,
+  double x,
+  double y,
+) {
+  final dx = bx - ax, dy = by - ay;
+  final length2 = dx * dx + dy * dy;
+  final t = length2 == 0
+      ? 0.0
+      : (((x - ax) * dx + (y - ay) * dy) / length2).clamp(0.0, 1.0);
+  final px = ax + dx * t, py = ay + dy * t;
+  return (t: t, px: px, py: py, d2: (px - x) * (px - x) + (py - y) * (py - y));
+}

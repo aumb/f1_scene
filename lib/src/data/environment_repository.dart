@@ -3,8 +3,8 @@ import 'dart:convert';
 import 'package:http/http.dart' as http;
 
 import 'circuit.dart';
-import 'data_cache.dart';
 import 'circuit_environment.dart';
+import 'data_cache.dart';
 
 /// Fetches circuit environments at runtime from F1TrackViewer's repository,
 /// pinned to the same commit as the vendored circuit data.
@@ -15,7 +15,7 @@ import 'circuit_environment.dart';
 class EnvironmentRepository {
   EnvironmentRepository({http.Client? client, DataCache? cache})
     : _http = client ?? http.Client(),
-      _files = cache ?? DataCache.instance;
+      _dataCache = cache ?? DataCache.instance;
 
   static const _base =
       'https://raw.githubusercontent.com/Makakashan/F1TrackViewer/'
@@ -23,26 +23,35 @@ class EnvironmentRepository {
 
   final http.Client _http;
 
-  /// The downloaded files, kept on the device: at a pinned commit they
-  /// never change.
-  final DataCache _files;
-  final _cache = <String, Future<CircuitEnvironment>>{};
+  /// Where downloaded files are kept, on the device: at a pinned commit
+  /// they never change.
+  final DataCache _dataCache;
+
+  /// Each circuit's environment, loaded or on its way.
+  final _loading = <String, Future<CircuitEnvironment>>{};
 
   Future<CircuitEnvironment> load(Circuit circuit) {
     final id = circuit.summary.id;
-    return _cache[id] ??= _fetch(circuit).catchError((Object e, StackTrace s) {
-      _cache.remove(id);
-      Error.throwWithStackTrace(e, s);
-    });
+    return _loading[id] ??= _fetch(circuit)
+        .catchError((Object e, StackTrace s) {
+          // Forget the failure so the next call retries.
+          _loading.remove(id);
+          Error.throwWithStackTrace(e, s);
+        });
   }
 
   Future<CircuitEnvironment> _fetch(Circuit circuit) async {
     final id = circuit.summary.id;
-    Future<Map<String, dynamic>> get(String name) async {
+    // [ifMissing] stands in for a file that isn't there.
+    Future<Map<String, dynamic>> get(
+      String name, {
+      Map<String, dynamic>? ifMissing,
+    }) async {
       final url = '$_base/$id/$name.json';
-      var body = await _files.read(url);
+      var body = await _dataCache.read(url);
       if (body == null) {
         final response = await _http.get(Uri.parse(url));
+        if (response.statusCode == 404 && ifMissing != null) return ifMissing;
         if (response.statusCode != 200) {
           throw http.ClientException(
             '${response.statusCode}',
@@ -50,7 +59,7 @@ class EnvironmentRepository {
           );
         }
         body = response.bodyBytes;
-        await _files.write(url, body, Keep.device);
+        await _dataCache.write(url, body, Keep.device);
       }
       return jsonDecode(utf8.decode(body)) as Map<String, dynamic>;
     }
@@ -66,7 +75,8 @@ class EnvironmentRepository {
     ) = await (
       get('manifest'),
       get('terrain'),
-      get('surface'),
+      // The sea mask is a nicety; the scene builds without it.
+      get('surface', ifMissing: const {}),
       get('water'),
       get('landuse'),
       get('roads'),

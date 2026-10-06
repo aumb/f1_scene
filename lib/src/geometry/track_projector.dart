@@ -39,24 +39,13 @@ class TrackProjector {
     : _grid = PointGrid(
         [for (final c in stations.center) c.x],
         [for (final c in stations.center) c.z],
-      ),
-      metersPerStation = _spacing(stations);
+      );
 
   final TrackStations stations;
   final PointGrid _grid;
 
   /// Average distance between consecutive stations.
-  final double metersPerStation;
-
-  static double _spacing(TrackStations stations) {
-    var length = 0.0;
-    for (var i = 0; i < stations.segmentCount; i++) {
-      length += stations.center[i].distanceTo(
-        stations.center[(i + 1) % stations.length],
-      );
-    }
-    return length / stations.segmentCount;
-  }
+  double get metersPerStation => stations.spacing;
 
   /// Stations either side of the hint searched before giving up on it.
   static const int _window = 60;
@@ -123,16 +112,17 @@ class TrackProjector {
     return (position: center + left * lateral, forward: forward);
   }
 
-  /// Lateral offsets keeping a body of [margin] half-width inside the edges
-  /// at [along].
-  (double, double) lateralLimits(double along, {double margin = 0}) {
+  /// The range of lateral offsets that keeps a body of [margin] half-width
+  /// inside the edges at [along]: [min] at the right edge (negative), [max]
+  /// at the left.
+  ({double min, double max}) lateralLimits(double along, {double margin = 0}) {
     final n = stations.length;
     final i = stations.closed
         ? along.floor() % n
         : along.floor().clamp(0, n - 1);
     return (
-      -math.max(0.0, stations.rightOffset[i] - margin),
-      math.max(0.0, stations.leftOffset[i] - margin),
+      min: -math.max(0.0, stations.rightOffset[i] - margin),
+      max: math.max(0.0, stations.leftOffset[i] - margin),
     );
   }
 
@@ -148,21 +138,15 @@ class TrackProjector {
         i = k;
       }
       final a = stations.center[i], b = stations.center[(i + 1) % n];
-      final dx = b.x - a.x, dz = b.z - a.z;
-      final length2 = dx * dx + dz * dz;
-      final t = length2 == 0
-          ? 0.0
-          : (((x - a.x) * dx + (z - a.z) * dz) / length2).clamp(0.0, 1.0);
-      final px = a.x + dx * t, pz = a.z + dz * t;
-      final ex = x - px, ez = z - pz;
-      final distance = math.sqrt(ex * ex + ez * ez);
+      final (:t, :px, py: pz, :d2) = closestOnSegment(a.x, a.z, b.x, b.z, x, z);
+      final distance = math.sqrt(d2);
       if (best == null || distance < best.distance) {
         final left = _lerp(stations.left[i], stations.left[(i + 1) % n], t)
           ..normalize();
         best = PathPoint(
           station: i,
           along: stations.closed ? (i + t) % n : i + t,
-          lateral: ex * left.x + ez * left.z,
+          lateral: (x - px) * left.x + (z - pz) * left.z,
           distance: distance,
         );
       }

@@ -3,7 +3,7 @@ import 'dart:typed_data';
 
 import 'package:vector_math/vector_math.dart';
 
-import 'track_mesh.dart';
+import 'mesh_arrays.dart';
 
 /// Colours for the painted parts of a car, linear RGBA.
 typedef CarPaint = ({
@@ -19,7 +19,7 @@ typedef CarPaint = ({
 ///
 /// Car space: origin on the ground under the middle of the car, +Z forward,
 /// +Y up and, flutter_scene's world being left-handed, +X to the car's
-/// right. About 5.4 m long and 1.9 m wide.
+/// right. About 5.3 m long and 2.0 m wide over the wheels.
 class CarMeshes {
   CarMeshes._({
     required this.upper,
@@ -35,14 +35,14 @@ class CarMeshes {
 
   /// Builds the car. Pure Dart; no GPU needed.
   factory CarMeshes.build() {
-    final upper = _Accumulator();
-    final lower = _Accumulator();
-    final nose = _Accumulator();
-    final engineCover = _Accumulator();
-    final wings = _Accumulator();
-    final carbon = _Accumulator();
-    final tyres = _Accumulator();
-    final accent = _Accumulator();
+    final upper = _PartBuilder();
+    final lower = _PartBuilder();
+    final nose = _PartBuilder();
+    final engineCover = _PartBuilder();
+    final wings = _PartBuilder();
+    final carbon = _PartBuilder();
+    final tyres = _PartBuilder();
+    final accent = _PartBuilder();
 
     // Nose, then the monocoque back to the gearbox, split a little below
     // its middle into upper and lower paint: (z, center height, width,
@@ -205,22 +205,18 @@ class CarMeshes {
   }
 
   static MeshArrays _numberPlates() {
-    final positions = <double>[], normals = <double>[], uvs = <double>[];
-    final indices = <int>[];
+    final mesh = MeshBuilder();
     // Corners listed top left, top right, bottom right, bottom left as the
     // number would read in a right-handed world. flutter_scene's world is
     // left-handed, which shows them mirrored, so the image is mapped right
     // to left to read the right way round.
+    final uvs = [Vector2(1, 0), Vector2(0, 0), Vector2(0, 1), Vector2(1, 1)];
     void plate(List<Vector3> corners, Vector3 normal) {
-      final base = positions.length ~/ 3;
-      const uv = [(1.0, 0.0), (0.0, 0.0), (0.0, 1.0), (1.0, 1.0)];
+      final base = mesh.vertexCount;
       for (var k = 0; k < 4; k++) {
-        positions.addAll([corners[k].x, corners[k].y, corners[k].z]);
-        normals.addAll([normal.x, normal.y, normal.z]);
-        uvs.addAll([uv[k].$1, uv[k].$2]);
+        mesh.vertex(corners[k], normal, uv: uvs[k]);
       }
-      // Wound so (b − a) × (c − a) points along [normal].
-      indices.addAll([base, base + 3, base + 2, base, base + 2, base + 1]);
+      mesh.quadFacing(base, base + 1, base + 2, base + 3, normal);
     }
 
     // On the nose's flat top between the sections at z 2.05 and 1.35, a
@@ -249,19 +245,16 @@ class CarMeshes {
         Vector3(x, bottom, start),
       ], Vector3(side, 0, 0));
     }
-    return MeshArrays(
-      positions: Float32List.fromList(positions),
-      normals: Float32List.fromList(normals),
-      texCoords: Float32List.fromList(uvs),
-      indices: Uint32List.fromList(indices),
-    );
+    return mesh.build();
   }
 }
 
-/// Collects triangles wound to face away from each part's interior, then
-/// derives area-weighted vertex normals (smooth where vertices are shared,
-/// flat where faces have their own).
-class _Accumulator {
+/// Builds one part of the car as a closed solid.
+///
+/// Unlike [MeshBuilder], it winds each triangle to face away from a point
+/// inside the part, and derives the vertex normals itself, area-weighted:
+/// smooth where faces share vertices, flat where they have their own.
+class _PartBuilder {
   final _positions = <Vector3>[];
   final _indices = <int>[];
 
@@ -321,7 +314,7 @@ class _Accumulator {
   /// cut go to [below]: two paints meeting along a clean line.
   void loft(
     List<(double, double, double, double)> sections, {
-    _Accumulator? below,
+    _PartBuilder? below,
     double split = 0,
     bool capFront = true,
     bool capBack = true,
@@ -353,14 +346,14 @@ class _Accumulator {
     }
     // Faces between outline points j and j + 1 go where their middle is.
     final n = heights.length;
-    _Accumulator target(int j) =>
+    _PartBuilder target(int j) =>
         below != null && heights[j] + heights[(j + 1) % n] < 2 * split
         ? below
         : this;
     // Vertices are shared within each part (smooth shading) but not across
     // the cut (a crisp line between the paints).
-    final ids = <_Accumulator, Map<int, int>>{};
-    int vertex(_Accumulator part, int ring, int j) =>
+    final ids = <_PartBuilder, Map<int, int>>{};
+    int vertex(_PartBuilder part, int ring, int j) =>
         ids.putIfAbsent(part, () => {})[ring * n + j] ??= part._vertex(
           rings[ring][j],
         );
@@ -378,12 +371,11 @@ class _Accumulator {
       }
     }
     // Fan caps, oriented away from the neighbouring section.
-    for (final (cap, ring, inside) in [
-      if (capFront) (true, 0, centers[1]),
-      if (capBack) (true, rings.length - 1, centers[centers.length - 2]),
+    for (final (ring, inside) in [
+      if (capFront) (0, centers[1]),
+      if (capBack) (rings.length - 1, centers[centers.length - 2]),
     ]) {
-      if (!cap) continue;
-      final hubs = <_Accumulator, int>{};
+      final hubs = <_PartBuilder, int>{};
       for (var j = 0; j < n; j++) {
         final part = target(j);
         final hub = hubs[part] ??= part._vertex(centers[ring]);
@@ -474,24 +466,20 @@ class _Accumulator {
   /// A UV sphere.
   void sphere(Vector3 center, double radius) {
     const rings = 8, segments = 12;
+    // Vertex k of ring r, from the top pole down.
+    int at(int r, int k) {
+      final phi = math.pi * r / rings, theta = 2 * math.pi * k / segments;
+      final direction = Vector3(
+        math.sin(phi) * math.cos(theta),
+        math.cos(phi),
+        math.sin(phi) * math.sin(theta),
+      );
+      return _vertex(center + direction * radius);
+    }
+
     final grid = [
       for (var r = 0; r <= rings; r++)
-        [
-          for (var k = 0; k < segments; k++)
-            () {
-              final phi = math.pi * r / rings;
-              final theta = 2 * math.pi * k / segments;
-              return _vertex(
-                center +
-                    Vector3(
-                          math.sin(phi) * math.cos(theta),
-                          math.cos(phi),
-                          math.sin(phi) * math.sin(theta),
-                        ) *
-                        radius,
-              );
-            }(),
-        ],
+        [for (var k = 0; k < segments; k++) at(r, k)],
     ];
     for (var r = 0; r < rings; r++) {
       for (var k = 0; k < segments; k++) {

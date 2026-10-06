@@ -5,6 +5,8 @@ import 'package:vector_math/vector_math.dart';
 
 import '../support/circuits.dart';
 
+import 'package:f1_scene/src/geometry/mesh_arrays.dart';
+
 /// Face normals of every triangle, from the winding order.
 Iterable<Vector3> faceNormals(MeshArrays mesh) sync* {
   Vector3 vertex(int i) => Vector3(
@@ -67,7 +69,7 @@ void main() {
   });
 
   test('skirts face outward from the track', () {
-    final mesh = builder.skirts(bahrain.elevationRange.$1 - 1);
+    final mesh = builder.skirts(bahrain.lowestElevation - 1);
     var t = 0;
     for (final n in faceNormals(mesh)) {
       final station = t ~/ 4;
@@ -80,19 +82,23 @@ void main() {
   });
 
   test('uses the measured width profile', () {
-    expect(bahrain.hasMeasuredWidth, isTrue);
+    expect(bahrain.summary.hasMeasuredWidth, isTrue);
     final widths = stations.halfWidth.map((h) => h * 2);
     expect(widths.reduce((a, b) => a < b ? a : b), closeTo(10.77, 0.5));
     expect(widths.reduce((a, b) => a > b ? a : b), closeTo(21.99, 0.5));
   });
 
-  test('sectors follow lap distance from the start/finish line', () {
-    expect(bahrain.sectorAt(bahrain.sAtLapDistance(10)).number, 1);
-    expect(bahrain.sectorAt(bahrain.sAtLapDistance(2500)).number, 2);
-    expect(bahrain.sectorAt(bahrain.sAtLapDistance(5000)).number, 3);
+  test('lap distance counts from the start/finish line', () {
+    expect(bahrain.sAtLapDistance(0), closeTo(bahrain.startFinishS, 1e-9));
+    // The vendored centerline differs a little in length from the official
+    // lap; the start/finish straight is straight enough to measure on.
+    final scale = bahrain.centerline.length / bahrain.lapLength;
+    final line = bahrain.centerline;
     expect(
-      bahrain.lapDistanceAt(bahrain.sAtLapDistance(1234)),
-      closeTo(1234, 1e-6),
+      line
+          .pointAt(bahrain.sAtLapDistance(0))
+          .distanceTo(line.pointAt(bahrain.sAtLapDistance(50))),
+      closeTo(50 * scale, 1),
     );
   });
 
@@ -119,7 +125,8 @@ void main() {
     });
 
     test('DRS bands cover their spans, across the seam too', () {
-      final bands = builder.drsBands([(100.0, 150.0), (2700.0, 20.0)]);
+      final seam = stations.length.toDouble();
+      final bands = builder.drsBands([(100.0, 150.0), (seam - 16, 20.0)]);
       // 50 stations, plus 16 + 20 across the seam.
       expect(bands.triangleCount, (50 + 36) * 2);
       for (final n in faceNormals(bands)) {

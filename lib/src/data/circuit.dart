@@ -5,38 +5,22 @@ import 'package:vector_math/vector_math.dart';
 import '../geometry/centerline.dart';
 import '../geometry/geo.dart';
 
-/// One entry of `assets/circuits/index.json`.
+/// One entry of `assets/circuits/index.json`: what is known about a circuit
+/// before loading it.
 class CircuitSummary {
-  const CircuitSummary({
-    required this.id,
-    required this.name,
-    required this.shortName,
-    required this.country,
-    required this.hasWidthProfile,
-  });
+  const CircuitSummary({required this.id, required this.hasMeasuredWidth});
 
   factory CircuitSummary.fromJson(Map<String, dynamic> json) => CircuitSummary(
     id: json['id'] as String,
-    name: json['name'] as String,
-    shortName: json['shortName'] as String,
-    country: json['country'] as String,
-    hasWidthProfile: json['hasWidth'] as bool? ?? false,
+    hasMeasuredWidth: json['hasWidth'] as bool? ?? false,
   );
 
+  /// F1TrackViewer's id, e.g. `bh-2002`: country code and opening year.
   final String id;
-  final String name;
-  final String shortName;
-  final String country;
-  final bool hasWidthProfile;
-}
 
-/// A timing sector, as a lap-distance range from the start/finish line.
-class Sector {
-  const Sector(this.number, this.fromDistance, this.toDistance);
-
-  final int number;
-  final double fromDistance;
-  final double toDistance;
+  /// Whether the circuit has a measured width profile (`widths/<id>.json`);
+  /// without one it is [Circuit.defaultWidth] wide all round.
+  final bool hasMeasuredWidth;
 }
 
 /// A circuit layout in scene space, ready for mesh building.
@@ -52,9 +36,9 @@ class Circuit {
     required this.lapLength,
     required this.startFinishS,
     required this.directionSign,
-    required this.sectors,
+    required this.sectorStarts,
     required this._widthSamples,
-    required this.elevationRange,
+    required this.lowestElevation,
     required this.meanElevation,
   });
 
@@ -93,16 +77,6 @@ class Circuit {
       for (var i = 0; i < count; i++)
         projection.project(lonLat[i].$1, lonLat[i].$2, heights[i] - mean),
     ];
-    final ys = points.map((p) => p.y);
-
-    final sectors = [
-      for (final s in markers['sectors'] as List)
-        Sector(
-          (s['id'] as num).toInt(),
-          (s['fromDistance'] as num).toDouble(),
-          (s['toDistance'] as num).toDouble(),
-        ),
-    ];
 
     return Circuit._(
       summary: summary,
@@ -111,11 +85,14 @@ class Circuit {
       lapLength: (markers['lapLengthMeters'] as num).toDouble(),
       startFinishS: (markers['startFinish']['s'] as num).toDouble(),
       directionSign: (markers['directionSign'] as num).toInt() >= 0 ? 1 : -1,
-      sectors: sectors,
+      sectorStarts: [
+        for (final s in markers['sectors'] as List)
+          (s['fromDistance'] as num).toDouble(),
+      ],
       widthSamples: width == null
           ? null
           : [for (final w in width['samples'] as List) (w as num).toDouble()],
-      elevationRange: (ys.reduce(math.min), ys.reduce(math.max)),
+      lowestElevation: points.map((p) => p.y).reduce(math.min),
       meanElevation: mean,
     );
   }
@@ -137,23 +114,24 @@ class Circuit {
   /// +1 when racing runs toward increasing `s`, -1 otherwise.
   final int directionSign;
 
-  final List<Sector> sectors;
+  /// Where each timing sector starts, in meters of lap distance from the
+  /// start/finish line (the first at 0).
+  final List<double> sectorStarts;
+
   final List<double>? _widthSamples;
 
-  /// Lowest and highest centerline heights in scene meters.
-  final (double, double) elevationRange;
+  /// Lowest centerline height in scene meters.
+  final double lowestElevation;
 
   /// Mean centerline elevation above sea level; scene height 0.
   final double meanElevation;
-
-  bool get hasMeasuredWidth => _widthSamples != null;
 
   /// Full track width in meters at arc fraction [s].
   double widthAt(double s) {
     final samples = _widthSamples;
     if (samples == null) return defaultWidth;
     final n = samples.length;
-    final pos = _wrap01(s) * n;
+    final pos = wrap01(s) * n;
     final i0 = pos.floor() % n;
     final f = pos - pos.floorToDouble();
     return samples[i0] + (samples[(i0 + 1) % n] - samples[i0]) * f;
@@ -161,20 +139,7 @@ class Circuit {
 
   /// Arc fraction at [meters] of lap distance from the start/finish line.
   double sAtLapDistance(double meters) =>
-      _wrap01(startFinishS + directionSign * meters / lapLength);
-
-  /// Lap distance in meters from the start/finish line at arc fraction [s].
-  double lapDistanceAt(double s) =>
-      _wrap01(directionSign * (s - startFinishS)) * lapLength;
-
-  /// The sector containing arc fraction [s].
-  Sector sectorAt(double s) {
-    final d = lapDistanceAt(s);
-    return sectors.firstWhere(
-      (sector) => d >= sector.fromDistance && d < sector.toDistance,
-      orElse: () => sectors.last,
-    );
-  }
+      wrap01(startFinishS + directionSign * meters / lapLength);
 
   /// Axis-aligned bounds of the centerline in scene space.
   Aabb3 get bounds {
@@ -185,6 +150,4 @@ class Circuit {
     }
     return box;
   }
-
-  static double _wrap01(double v) => v - v.floorToDouble();
 }

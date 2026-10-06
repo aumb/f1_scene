@@ -1,9 +1,9 @@
 import 'package:f1_scene/src/geometry/car_mesh.dart';
-import 'package:f1_scene/src/geometry/track_mesh.dart';
 import 'package:f1_scene/src/race/liveries.dart';
 import 'package:f1_scene/src/race/race_models.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:vector_math/vector_math.dart';
+import 'package:f1_scene/src/geometry/mesh_arrays.dart';
 
 RaceDriver driver(String team, [int colour = 0x123456]) => RaceDriver(
   number: 1,

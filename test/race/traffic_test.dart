@@ -33,8 +33,8 @@ void main() {
     final out = traffic.separate({4: car(800), 11: car(800)});
     expect(sideBySide(out[4]!, out[11]!), inInclusiveRange(2.2, 2.4));
     for (final pose in out.values) {
-      final (lo, hi) = track.lateralLimits(pose.along!, margin: 1);
-      expect(pose.lateral, inInclusiveRange(lo - 1e-6, hi + 1e-6));
+      final (:min, :max) = track.lateralLimits(pose.along!, margin: 1);
+      expect(pose.lateral, inInclusiveRange(min - 1e-6, max + 1e-6));
     }
   });
 
@@ -124,7 +124,7 @@ void main() {
     expect(sideBySide(three[2]!, three[3]!), greaterThan(2.1));
 
     // The shared line hugs the left edge: both still fit, inside it.
-    final (_, hi) = track.lateralLimits(600 / mps, margin: 1);
+    final hi = track.lateralLimits(600 / mps, margin: 1).max;
     final edge = traffic.separate({
       1: car(600, lateral: hi),
       2: car(600, lateral: hi),

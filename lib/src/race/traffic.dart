@@ -156,7 +156,7 @@ class TrafficSeparation {
           at = next;
           if (settled) break;
         }
-        lateral[i] = at.clamp(limits[i].$1, limits[i].$2);
+        lateral[i] = at.clamp(limits[i].min, limits[i].max);
       }
     }
     return lateral;

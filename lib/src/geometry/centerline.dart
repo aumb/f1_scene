@@ -10,15 +10,17 @@ import 'package:vector_math/vector_math.dart';
 /// range wrap. This is the same parameterization F1TrackViewer uses for its
 /// width profiles, so those samples line up without remapping.
 class Centerline {
-  Centerline(List<Vector3> controlPoints, {this._samplesPerSegment = 128})
+  Centerline(List<Vector3> controlPoints)
     : assert(controlPoints.length >= 3, 'A closed loop needs 3+ points'),
       _points = List.unmodifiable(controlPoints) {
     _segments = List.generate(_points.length, _segmentAt);
     _buildArcTable();
   }
 
+  /// Arc length table entries per segment.
+  static const _samplesPerSegment = 128;
+
   final List<Vector3> _points;
-  final int _samplesPerSegment;
   late final List<_Segment> _segments;
 
   /// Cumulative arc length at each table entry, entry `k` being parameter
@@ -28,11 +30,9 @@ class Centerline {
   /// Total loop length in meters.
   double get length => _arc.last;
 
-  int get controlPointCount => _points.length;
-
   /// Position at arc fraction [s].
   Vector3 pointAt(double s) {
-    final u = _paramAt(_wrap01(s) * length);
+    final u = _paramAt(wrap01(s) * length);
     final segment = u.floor().clamp(0, _segments.length - 1);
     return _segments[segment].eval(u - segment);
   }
@@ -44,7 +44,7 @@ class Centerline {
     return (pointAt(s + ds) - pointAt(s - ds))..normalize();
   }
 
-  /// Arc fraction of the curve point closest to control point [index].
+  /// Arc fraction at control point [index], which the curve passes through.
   double sAtControlPoint(int index) =>
       _arc[index * _samplesPerSegment] / length;
 
@@ -108,9 +108,10 @@ class Centerline {
     final m2 = tangent(p1, p2, p3, dt1, dt2) * dt1;
     return _Segment(p1, p2, m1, m2);
   }
-
-  static double _wrap01(double v) => v - v.floorToDouble();
 }
+
+/// [v] wrapped into `[0, 1)`.
+double wrap01(double v) => v - v.floorToDouble();
 
 /// Cubic Hermite segment from [p1] to [p2] with end tangents [m1], [m2].
 class _Segment {
