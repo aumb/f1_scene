@@ -5,13 +5,15 @@ import 'package:f1_scene/src/data/circuit_environment.dart';
 import 'package:f1_scene/src/geometry/track_mesh.dart';
 
 /// Flat ground [height] meters up, reaching [margin] meters past [stations]
-/// on every side, with [buildings] and nothing else on it. A 64 x 64 grid,
-/// like the real ones.
+/// on every side, with [buildings], [roads] and [water] on it. A 64 x 64
+/// grid, like the real ones.
 CircuitEnvironment flatEnvironment(
   TrackStations stations, {
   required double height,
   double margin = 1000,
   List<EnvironmentShape> buildings = const [],
+  List<EnvironmentShape> roads = const [],
+  List<EnvironmentShape> water = const [],
 }) {
   final xs = stations.center.map((c) => c.x);
   final zs = stations.center.map((c) => c.z);
@@ -24,9 +26,9 @@ CircuitEnvironment flatEnvironment(
       northZ: zs.reduce(math.max) + margin,
       heights: Float64List(64 * 64)..fillRange(0, 64 * 64, height),
     ),
-    water: const [],
+    water: water,
     landuse: const [],
-    roads: const [],
+    roads: roads,
     buildings: buildings,
   );
 }

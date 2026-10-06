@@ -148,6 +148,45 @@ void main() {
       );
     });
 
+    test('keeps everything within the ground', () {
+      // Shapes crossing the ground's south-west corner, far from the track:
+      // a road running on 2 km past it, a building and a lake over its edge.
+      final grid = plateau().terrain;
+      final corner = Vector2(grid.minX, grid.southZ);
+      List<Vector2> rectangle(double x0, double z0, double x1, double z1) => [
+        corner + Vector2(x0, z0),
+        corner + Vector2(x1, z0),
+        corner + Vector2(x1, z1),
+        corner + Vector2(x0, z1),
+      ];
+      final builder = EnvironmentMeshBuilder(
+        flatEnvironment(
+          stations,
+          height: 30,
+          roads: [
+            EnvironmentShape('primary', [
+              corner + Vector2(300, 300),
+              corner + Vector2(-2000, -1500),
+            ]),
+          ],
+          buildings: [
+            EnvironmentShape('building', rectangle(-5, 200, 10, 215)),
+          ],
+          water: [EnvironmentShape('water', rectangle(-100, 100, 200, 300))],
+        ),
+        track,
+      );
+      for (final mesh in [builder.roads(), builder.water()]) {
+        expect(mesh.vertexCount, greaterThan(0));
+        for (var i = 0; i < mesh.vertexCount; i++) {
+          final p = vertexOf(mesh, i);
+          expect(p.x, inInclusiveRange(grid.minX - 1e-6, grid.maxX + 1e-6));
+          expect(p.z, inInclusiveRange(grid.southZ - 1e-6, grid.northZ + 1e-6));
+        }
+      }
+      expect(builder.buildings().triangleCount, 0);
+    });
+
     test('terrain surface faces up', () {
       final mesh = EnvironmentMeshBuilder(plateau(), track).terrainBlock(-50);
       // The surface comes first: the grid upsampled to 127 x 127 nodes,

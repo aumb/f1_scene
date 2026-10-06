@@ -12,7 +12,9 @@ import 'track_projector.dart';
 /// The terrain is upsampled, then cut down or built up to sit just under the
 /// track, and everything else (buildings, roads, water, trees) stands on
 /// that shaped ground. Buildings, roads and trees that would touch the
-/// circuit are left out.
+/// circuit are left out, and nothing reaches past the ground's edges:
+/// OpenStreetMap shapes that cross them come whole, roads sometimes
+/// kilometres beyond.
 class EnvironmentMeshBuilder {
   EnvironmentMeshBuilder(this.environment, this.track)
     : _ground = _upsample(environment.terrain) {
@@ -30,6 +32,14 @@ class EnvironmentMeshBuilder {
 
   /// The ground's colour at each of its nodes.
   late final List<Vector4> _colors;
+
+  /// The ground's extent; everything built stays within it.
+  late final _bounds = _Box(
+    _ground.minX,
+    _ground.maxX,
+    _ground.southZ,
+    _ground.northZ,
+  );
 
   static final _terrain = linearColor(0x22262D);
   static final _grass = linearColor(0x26332A);
@@ -65,7 +75,9 @@ class EnvironmentMeshBuilder {
 
   _Solid? _solidOf(EnvironmentShape building) {
     final ring = _ccw(_open(building.points));
-    if (ring.length < 3 || !_clearOfTrack(ring)) return null;
+    if (ring.length < 3) return null;
+    if (!ring.every((p) => _bounds.contains(p.x, p.y))) return null;
+    if (!_clearOfTrack(ring)) return null;
     final ground = ring.map((p) => groundAt(p.x, p.y)).reduce(math.min);
     final height = building.height > 0 ? building.height : _defaultHeight;
     return _Solid(ring, _Box.of(ring), ground, ground + height);
@@ -291,53 +303,67 @@ class EnvironmentMeshBuilder {
   }
 
   /// Roads as ribbons draped over the ground, broken where they would cross
-  /// the circuit. Footpaths and race tracks are left out.
+  /// the circuit or leave the ground. Footpaths and race tracks are left
+  /// out.
   MeshArrays roads() {
     final mesh = MeshBuilder();
     final color = linearColor(0x363B43);
-    final up = Vector3(0, 1, 0);
     for (final road in environment.roads) {
       final width = _roadWidth(road.kind);
       if (width == null) continue;
-      // Points every ~10 m so the ribbon follows the ground.
-      final dense = <Vector2>[];
-      for (var i = 0; i + 1 < road.points.length; i++) {
-        final a = road.points[i], b = road.points[i + 1];
-        final steps = math.max(1, (a.distanceTo(b) / 10).ceil());
-        for (var k = 0; k < steps; k++) {
-          dense.add(a + (b - a) * (k / steps));
-        }
-      }
-      if (road.points.isNotEmpty) dense.add(road.points.last);
-
-      var previous = -1;
-      for (var i = 0; i < dense.length; i++) {
-        final p = dense[i];
-        if (_beyondTrack(p.x, p.y, within: width / 2 + 3) < width / 2 + 3) {
-          previous = -1;
-          continue;
-        }
-        final ahead = dense[math.min(i + 1, dense.length - 1)];
-        final behind = dense[math.max(i - 1, 0)];
-        final direction = ahead - behind;
-        if (direction.length2 < 1e-6) continue;
-        direction.normalize();
-        final side = Vector2(direction.y, -direction.x) * (width / 2);
-        final v = mesh.vertexCount;
-        for (final q in [p + side, p - side]) {
-          mesh.vertex(
-            Vector3(q.x, groundAt(q.x, q.y) + 0.25, q.y),
-            up,
-            color: color,
-          );
-        }
-        if (previous >= 0) {
-          mesh.quadFacing(previous, previous + 1, v + 1, v, up);
-        }
-        previous = v;
+      // Kept far enough inside the edges that the ribbon's sides are too.
+      for (final run in _bounds.inset(width / 2).runsInside(road.points)) {
+        _addRoad(mesh, run, width, color);
       }
     }
     return mesh.build();
+  }
+
+  /// One stretch of road through [line], [width] meters wide.
+  void _addRoad(
+    MeshBuilder mesh,
+    List<Vector2> line,
+    double width,
+    Vector4 color,
+  ) {
+    final up = Vector3(0, 1, 0);
+    // Points every ~10 m so the ribbon follows the ground.
+    final dense = <Vector2>[];
+    for (var i = 0; i + 1 < line.length; i++) {
+      final a = line[i], b = line[i + 1];
+      final steps = math.max(1, (a.distanceTo(b) / 10).ceil());
+      for (var k = 0; k < steps; k++) {
+        dense.add(a + (b - a) * (k / steps));
+      }
+    }
+    dense.add(line.last);
+
+    var previous = -1;
+    for (var i = 0; i < dense.length; i++) {
+      final p = dense[i];
+      if (_beyondTrack(p.x, p.y, within: width / 2 + 3) < width / 2 + 3) {
+        previous = -1;
+        continue;
+      }
+      final ahead = dense[math.min(i + 1, dense.length - 1)];
+      final behind = dense[math.max(i - 1, 0)];
+      final direction = ahead - behind;
+      if (direction.length2 < 1e-6) continue;
+      direction.normalize();
+      final side = Vector2(direction.y, -direction.x) * (width / 2);
+      final v = mesh.vertexCount;
+      for (final q in [p + side, p - side]) {
+        mesh.vertex(
+          Vector3(q.x, groundAt(q.x, q.y) + 0.25, q.y),
+          up,
+          color: color,
+        );
+      }
+      if (previous >= 0) {
+        mesh.quadFacing(previous, previous + 1, v + 1, v, up);
+      }
+      previous = v;
+    }
   }
 
   /// Lakes, rivers and sea as flat surfaces at their shore's lowest ground.
@@ -346,7 +372,7 @@ class EnvironmentMeshBuilder {
     final color = linearColor(0x1B4A60);
     final up = Vector3(0, 1, 0);
     for (final w in environment.water) {
-      final ring = _ccw(_open(w.points));
+      final ring = _bounds.clipPolygon(_ccw(_open(w.points)));
       if (ring.length < 3) continue;
       final level = _waterLevel(ring) + 0.05;
       final base = mesh.vertexCount;
@@ -380,7 +406,8 @@ class EnvironmentMeshBuilder {
         attempts++;
         final x = box.minX + random.nextDouble() * (box.maxX - box.minX);
         final z = box.minZ + random.nextDouble() * (box.maxZ - box.minZ);
-        if (!_inside(ring, x, z) || _beyondTrack(x, z, within: 8) < 8) continue;
+        if (!_bounds.contains(x, z) || !_inside(ring, x, z)) continue;
+        if (_beyondTrack(x, z, within: 8) < 8) continue;
         out.add(Vector3(x, groundAt(x, z), z));
         placed++;
       }
@@ -585,4 +612,86 @@ class _Box {
 
   bool contains(double x, double z) =>
       x >= minX && x <= maxX && z >= minZ && z <= maxZ;
+
+  /// This box shrunk by [margin] on every side.
+  _Box inset(double margin) =>
+      _Box(minX + margin, maxX - margin, minZ + margin, maxZ - margin);
+
+  /// The part of the segment from [a] to [b] inside this box, or null when
+  /// it misses (Liang-Barsky: each edge narrows the range of the segment's
+  /// parameter that lies on its inner side).
+  (Vector2, Vector2)? clip(Vector2 a, Vector2 b) {
+    final d = b - a;
+    var t0 = 0.0, t1 = 1.0;
+    for (final (p, q) in [
+      (-d.x, a.x - minX),
+      (d.x, maxX - a.x),
+      (-d.y, a.y - minZ),
+      (d.y, maxZ - a.y),
+    ]) {
+      if (p == 0) {
+        // Parallel to this edge: wholly inside it or wholly out.
+        if (q < 0) return null;
+        continue;
+      }
+      final t = q / p;
+      if (p < 0) {
+        if (t > t1) return null;
+        t0 = math.max(t0, t);
+      } else {
+        if (t < t0) return null;
+        t1 = math.min(t1, t);
+      }
+    }
+    return (a + d * t0, a + d * t1);
+  }
+
+  /// The stretches of the polyline [line] inside this box, cut where it
+  /// crosses the edges.
+  List<List<Vector2>> runsInside(List<Vector2> line) {
+    final runs = <List<Vector2>>[];
+    List<Vector2>? run;
+    for (var i = 0; i + 1 < line.length; i++) {
+      final clipped = clip(line[i], line[i + 1]);
+      if (clipped == null) {
+        run = null;
+        continue;
+      }
+      final (a, b) = clipped;
+      if (run == null || run.last.distanceTo(a) > 1e-6) runs.add(run = [a]);
+      run.add(b);
+      // Left the box: the next stretch inside starts afresh.
+      if (b.distanceTo(line[i + 1]) > 1e-6) run = null;
+    }
+    return runs;
+  }
+
+  /// The polygon [ring] cut down to this box (Sutherland-Hodgman: clip
+  /// against each edge in turn). Keeps the winding.
+  List<Vector2> clipPolygon(List<Vector2> ring) {
+    var out = ring;
+    for (final (inside, cross)
+        in <(bool Function(Vector2), Vector2 Function(Vector2, Vector2))>[
+          ((p) => p.x >= minX, (a, b) => _atX(a, b, minX)),
+          ((p) => p.x <= maxX, (a, b) => _atX(a, b, maxX)),
+          ((p) => p.y >= minZ, (a, b) => _atY(a, b, minZ)),
+          ((p) => p.y <= maxZ, (a, b) => _atY(a, b, maxZ)),
+        ]) {
+      if (out.isEmpty) break;
+      final next = <Vector2>[];
+      for (var i = 0; i < out.length; i++) {
+        final a = out[i], b = out[(i + 1) % out.length];
+        if (inside(a)) next.add(a);
+        if (inside(a) != inside(b)) next.add(cross(a, b));
+      }
+      out = next;
+    }
+    return out;
+  }
+
+  /// Where the segment from [a] to [b] crosses x = [x], and z = [z].
+  static Vector2 _atX(Vector2 a, Vector2 b, double x) =>
+      a + (b - a) * ((x - a.x) / (b.x - a.x));
+  static Vector2 _atY(Vector2 a, Vector2 b, double z) =>
+      a + (b - a) * ((z - a.y) / (b.y - a.y));
 }
