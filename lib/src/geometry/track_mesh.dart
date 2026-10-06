@@ -6,6 +6,9 @@ import 'package:vector_math/vector_math.dart';
 import '../data/circuit.dart';
 
 /// Raw triangle-list mesh arrays, independent of any renderer.
+///
+/// Every mesh here winds its triangles so that (b − a) × (c − a) points out
+/// of the side meant to be seen.
 class MeshArrays {
   MeshArrays({
     required this.positions,
@@ -36,6 +39,18 @@ Vector4 linearColor(int rgb, [double alpha = 1]) {
 
   return Vector4(channel(16), channel(8), channel(0), alpha);
 }
+
+/// The level direction to the left of [forward].
+///
+/// That is forward × up: flutter_scene's world is left-handed (+X lies to
+/// the right of +Z seen from above), so it is the reverse of the up ×
+/// forward a right-handed engine would use.
+Vector3 leftOf(Vector3 forward) =>
+    Vector3(-forward.z, 0, forward.x)..normalize();
+
+/// The angle, radians, from level direction [a] round to [b]: positive
+/// when [b] lies to the left of [a].
+double leftTurn(Vector3 a, Vector3 b) => math.atan2(b.cross(a).y, a.dot(b));
 
 /// Cross-sections sampled evenly along a path (a circuit loop, or the open
 /// pit lane), shared by every mesh and lookup that follows it.
@@ -81,9 +96,8 @@ class TrackStations {
       // enough at 2 m spacing.
       final t = (center[at(i + 1)] - center[at(i - 1)])..normalize();
       forward.add(t);
-      // Horizontal left of travel: up x forward. Keeping it level means the
-      // surface has no banking, which matches the source data.
-      left.add(Vector3(t.z, 0, -t.x)..normalize());
+      // Kept level: the surface has no banking, which matches the data.
+      left.add(leftOf(t));
     }
     final step = _pathLength(center, closed) / (closed ? count : count - 1);
 
@@ -95,12 +109,12 @@ class TrackStations {
     final rightLimit = List.filled(count, double.infinity);
     for (var i = 0; i < count; i++) {
       final a = left[at(i - 1)], b = left[at(i + 1)];
-      final turn = math.atan2(a.cross(b).y, a.dot(b));
+      final turn = leftTurn(a, b);
       if (turn.abs() < 1e-9) continue;
       // Two spans between the neighbours, one at the ends of an open path.
       final spans = closed ? 2 : at(i + 1) - at(i - 1);
       final radius = spans * step / turn.abs();
-      // A positive turn about +Y is a left-hander, whose inside is the left.
+      // The inside of a left-hander is the left.
       if (turn > 0) {
         leftLimit[i] = 0.85 * radius;
       } else {
@@ -146,6 +160,9 @@ class TrackStations {
 
   /// Number of spans between stations.
   int get segmentCount => closed ? length : length - 1;
+
+  /// The surface normal at station [i]: up, tilted with the slope.
+  Vector3 up(int i) => left[i].cross(forward[i])..normalize();
 
   Vector3 leftEdge(int i) => center[i] + left[i] * leftOffset[i];
   Vector3 rightEdge(int i) => center[i] - left[i] * rightOffset[i];
@@ -197,19 +214,18 @@ MeshArrays ribbonSurface(TrackStations stations, Float32List colors) {
   final indices = Uint32List(stations.segmentCount * 6);
 
   for (var i = 0; i < n; i++) {
-    // Surface normal: forward x left, which is +Y on level ground and tilts
-    // with the slope.
-    final normal = stations.forward[i].cross(stations.left[i])..normalize();
+    // Surface normal: +Y on level ground, tilted with the slope.
+    final normal = stations.up(i);
     _put3(positions, i * 2, stations.leftEdge(i));
     _put3(positions, i * 2 + 1, stations.rightEdge(i));
     _put3(normals, i * 2, normal);
     _put3(normals, i * 2 + 1, normal);
   }
   for (var i = 0; i < stations.segmentCount; i++) {
-    // Counter-clockwise seen from above (verified in track_mesh_test).
+    // Wound to face up (see [MeshArrays]; verified in track_mesh_test).
     final l0 = i * 2, r0 = l0 + 1;
     final l1 = ((i + 1) % n) * 2, r1 = l1 + 1;
-    indices.setAll(i * 6, [l0, r0, l1, r0, r1, l1]);
+    indices.setAll(i * 6, [l0, l1, r0, r0, l1, r1]);
   }
   return MeshArrays(
     positions: positions,
@@ -248,9 +264,9 @@ MeshArrays ribbonSkirts(TrackStations stations, double baseY) {
     final lt1 = next, lb1 = next + 1, rt1 = next + 2, rb1 = next + 3;
     indices.setAll(i * 12, [
       // Left skirt faces +left.
-      lb0, lt0, lb1, lt0, lt1, lb1,
+      lb0, lb1, lt0, lt0, lb1, lt1,
       // Right skirt faces -left.
-      rb0, rb1, rt0, rt0, rb1, rt1,
+      rb0, rt0, rb1, rt0, rt1, rb1,
     ]);
   }
   return MeshArrays(positions: positions, normals: normals, indices: indices);
@@ -288,7 +304,7 @@ class _Quads {
       _normals.addAll([normal.x, normal.y, normal.z]);
       _colors.addAll([color.x, color.y, color.z, color.w]);
     }
-    _indices.addAll([v, v + 1, v + 2, v + 1, v + 3, v + 2]);
+    _indices.addAll([v, v + 2, v + 1, v + 1, v + 2, v + 3]);
   }
 
   MeshArrays build() => MeshArrays(
@@ -377,10 +393,8 @@ class TrackMeshBuilder {
     // Signed curvature (positive turns left), smoothed over ~14 m.
     final raw = [
       for (var i = 0; i < n; i++)
-        () {
-          final a = stations.left[at(i - 2)], b = stations.left[at(i + 2)];
-          return math.atan2(a.cross(b).y, a.dot(b)) / (4 * step);
-        }(),
+        leftTurn(stations.left[at(i - 2)], stations.left[at(i + 2)]) /
+            (4 * step),
     ];
     final curvature = [
       for (var i = 0; i < n; i++)
@@ -405,7 +419,7 @@ class TrackMeshBuilder {
         Vector3 inner(int s) =>
             edge(s) -
             stations.left[s] * (side * math.min(width, offset(s) * 0.4));
-        final normal = stations.forward[i].cross(stations.left[i])..normalize();
+        final normal = stations.up(i);
         final color = k.isEven ? red : white;
         // Corners ordered left, right, next-left, next-right.
         if (side > 0) {
@@ -461,7 +475,7 @@ class TrackMeshBuilder {
                     fraction *
                     (stations.leftOffset[s] + stations.rightOffset[s]) /
                     2);
-        final normal = stations.forward[i].cross(stations.left[i])..normalize();
+        final normal = stations.up(i);
         quads.add(
           side(i, 1),
           side(i, -1),
@@ -487,8 +501,8 @@ class TrackMeshBuilder {
     final quads = into ?? _Quads();
     final center = circuit.centerline.pointAt(s);
     final forward = circuit.centerline.tangentAt(s);
-    final left = Vector3(forward.z, 0, -forward.x)..normalize();
-    final normal = forward.cross(left)..normalize();
+    final left = leftOf(forward);
+    final normal = left.cross(forward)..normalize();
     final halfWidth = circuit.widthAt(s) / 2;
     final cellWidth = halfWidth * 2 / columns;
     final cellLength = length / rows;

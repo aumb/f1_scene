@@ -55,9 +55,9 @@ void main() {
     final hi =
         stations.center.map((c) => c.x).reduce((a, b) => a > b ? a : b) + 1000;
     final south =
-        stations.center.map((c) => c.z).reduce((a, b) => a > b ? a : b) + 1000;
-    final north =
         stations.center.map((c) => c.z).reduce((a, b) => a < b ? a : b) - 1000;
+    final north =
+        stations.center.map((c) => c.z).reduce((a, b) => a > b ? a : b) + 1000;
 
     /// A 30 m plateau over the whole circuit, so it would bury the track.
     CircuitEnvironment plateau({List<EnvironmentShape> buildings = const []}) =>
@@ -89,7 +89,7 @@ void main() {
           expect(builder.groundAt(p.x, p.z), lessThan(p.y - 0.3), reason: '$i');
         }
       }
-      expect(builder.groundAt(lo + 50, south - 50), closeTo(30, 1e-6));
+      expect(builder.groundAt(lo + 50, south + 50), closeTo(30, 1e-6));
     });
 
     test('builds the ground up to the track over a valley', () {
@@ -112,7 +112,7 @@ void main() {
         final c = stations.center[i];
         expect(builder.groundAt(c.x, c.z), closeTo(c.y - 1.5, 1.0));
       }
-      expect(builder.groundAt(lo + 50, south - 50), closeTo(-40, 1e-6));
+      expect(builder.groundAt(lo + 50, south + 50), closeTo(-40, 1e-6));
     });
 
     test('skips buildings on the circuit', () {
@@ -175,8 +175,8 @@ void main() {
       // Into the 30 m plateau from below it.
       expect(
         obstacles.canSee(
-          Vector3(lo + 50, 10, south - 50),
-          Vector3(lo + 250, 10, south - 50),
+          Vector3(lo + 50, 10, south + 50),
+          Vector3(lo + 250, 10, south + 50),
         ),
         isFalse,
       );

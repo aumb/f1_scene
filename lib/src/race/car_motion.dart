@@ -22,7 +22,8 @@ class CarPose {
   /// On the driving surface.
   final Vector3 position;
 
-  /// Yaw in radians about +Y; 0 faces +Z.
+  /// Yaw in radians about +Y: 0 faces +Z (north), and it grows as the car
+  /// turns right (clockwise seen from above).
   final double heading;
 
   /// Nose-up angle in radians, following the track's gradient so the car
@@ -65,15 +66,15 @@ class CarMotion {
   /// Half a car's width; it stays this far inside the edges.
   static const double carHalfWidth = 1.0;
 
-  /// How far a car turns, in radians, for moving sideways at [sideways] m/s
-  /// while driving at [speed] m/s: to point where it is going. Capped, so
-  /// noise never twitches a car, and gentle at walking pace, where any
-  /// sideways drift would swing it round; none at all below
-  /// [_minTurnSpeed].
-  static double yawFor(double sideways, double speed) {
+  /// The change in heading, radians, that points a car where it is going
+  /// when it moves left at [leftward] m/s while driving at [speed] m/s
+  /// (negative: heading grows turning right). Capped, so noise never
+  /// twitches a car, and gentle at walking pace, where any sideways drift
+  /// would swing it round; none at all below [_minTurnSpeed].
+  static double yawFor(double leftward, double speed) {
     if (speed <= _minTurnSpeed) return 0;
-    return math
-        .atan2(sideways, math.max(speed, _gentleBelow))
+    return -math
+        .atan2(leftward, math.max(speed, _gentleBelow))
         .clamp(-_maxYaw, _maxYaw);
   }
 

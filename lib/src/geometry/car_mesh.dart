@@ -208,8 +208,9 @@ class CarMeshes {
     final positions = <double>[], normals = <double>[], uvs = <double>[];
     final indices = <int>[];
     // Corners listed top left, top right, bottom right, bottom left as the
-    // number would read in a right-handed world; flutter_scene's is
-    // left-handed, which mirrors it, so the image is mapped mirrored back.
+    // number would read in a right-handed world. flutter_scene's world is
+    // left-handed, which shows them mirrored, so the image is mapped right
+    // to left to read the right way round.
     void plate(List<Vector3> corners, Vector3 normal) {
       final base = positions.length ~/ 3;
       const uv = [(1.0, 0.0), (0.0, 0.0), (0.0, 1.0), (1.0, 1.0)];
@@ -218,7 +219,7 @@ class CarMeshes {
         normals.addAll([normal.x, normal.y, normal.z]);
         uvs.addAll([uv[k].$1, uv[k].$2]);
       }
-      // Counter-clockwise seen from the side the normal faces.
+      // Wound so (b − a) × (c − a) points along [normal].
       indices.addAll([base, base + 3, base + 2, base, base + 2, base + 1]);
     }
 

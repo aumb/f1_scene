@@ -18,19 +18,21 @@ void main() {
   final track = TrackProjector(stations);
 
   /// Samples of a car driving at [speed] m/s from station [from], [lateral]
-  /// meters left of the centerline, every 0.26 s (OpenF1's ~3.85 Hz).
+  /// meters left of the centerline and moving left at [drift] m/s, every
+  /// 0.26 s (OpenF1's ~3.85 Hz).
   SampleWindow windowAround(
     double t, {
     required double from,
     double speed = 30,
     double lateral = 2,
+    double drift = 0,
   }) {
     final times = <double>[], xs = <double>[], ys = <double>[];
     final base = (t / 0.26).floor() - 1;
     for (var k = base; k < base + 4; k++) {
       final time = k * 0.26;
       final along = from + time * speed / track.metersPerStation;
-      final p = track.place(along, lateral).position;
+      final p = track.place(along, lateral + drift * time).position;
       times.add(time);
       xs.add(p.x);
       ys.add(p.z);
@@ -115,6 +117,21 @@ void main() {
     final pose = motion.pose(1, windowAround(1, from: 40, speed: 0), 1)!;
     final forward = stations.forward[40];
     expect(pose.heading, closeTo(math.atan2(forward.x, forward.z), 0.05));
+  });
+
+  test('turns its nose toward a lane change', () {
+    for (final drift in [-3.0, 3.0]) {
+      // On the main straight, moving left (positive drift) or right.
+      final motion = CarMotion(alignment: identity, track: track);
+      final pose = motion.pose(
+        1,
+        windowAround(1, from: 100, speed: 60, lateral: 0, drift: drift),
+        1,
+      )!;
+      final nose = Vector3(math.sin(pose.heading), 0, math.cos(pose.heading));
+      final p = track.project(pose.position.x, pose.position.z);
+      expect(nose.dot(stations.left[p.station]).sign, drift.sign);
+    }
   });
 
   test('handles neighbours on the other path at the pit entry', () {

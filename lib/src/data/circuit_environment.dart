@@ -23,7 +23,7 @@ class TerrainGrid {
   final double maxX;
 
   /// Scene z of the southern edge (rows start here) and the northern one.
-  /// North is -Z, so [southZ] > [northZ].
+  /// North is +Z, so [southZ] < [northZ].
   final double southZ;
   final double northZ;
 

@@ -281,7 +281,7 @@ class TvCameraController extends CameraController {
       final a = stations.forward[wrap(i - reach)];
       final b = stations.forward[wrap(i + reach)];
       // Outside of a left-hander is the right, and vice versa.
-      final turningLeft = a.cross(b).y > 0;
+      final turningLeft = leftTurn(a, b) > 0;
 
       Vector3? bestPosition;
       var bestScore = -1.0;

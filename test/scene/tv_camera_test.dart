@@ -46,9 +46,8 @@ void main() {
           size: 64,
           minX: minX,
           maxX: maxX,
-          // North is -Z in the scene.
-          southZ: maxZ,
-          northZ: minZ,
+          southZ: minZ,
+          northZ: maxZ,
           heights: Float64List(64 * 64)..fillRange(0, 64 * 64, low),
         ),
         water: const [],

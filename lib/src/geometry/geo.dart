@@ -4,9 +4,11 @@ import 'package:vector_math/vector_math.dart';
 
 /// Projects WGS84 longitude/latitude onto a local tangent plane in meters.
 ///
-/// Scene axes: +X is east, -Z is north, +Y is up. An equirectangular
-/// projection around [originLon]/[originLat] is accurate to well under a
-/// meter across a circuit-sized area.
+/// Scene axes: +X is east, +Z is north, +Y is up. flutter_scene's world is
+/// left-handed (seen from above with north up, +X is on the right), so this
+/// is what puts east on the right and draws each circuit as on a map, not
+/// mirrored. An equirectangular projection around [originLon]/[originLat]
+/// is accurate to well under a meter across a circuit-sized area.
 class LocalProjection {
   LocalProjection(this.originLon, this.originLat)
     : _metersPerDegLon = _metersPerDegLat * math.cos(originLat * math.pi / 180);
@@ -34,6 +36,6 @@ class LocalProjection {
   Vector3 project(double lon, double lat, [double y = 0]) => Vector3(
     (lon - originLon) * _metersPerDegLon,
     y,
-    -(lat - originLat) * _metersPerDegLat,
+    (lat - originLat) * _metersPerDegLat,
   );
 }

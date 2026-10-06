@@ -26,8 +26,9 @@ RaceLap referenceLap(List<RaceLap> laps) {
 /// Fits OpenF1's circuit frame onto the circuit sampled as [stations], from
 /// the positions [lap]'s driver logged through it.
 ///
-/// OpenF1 reports positions in its own frame (decimetres, rotated, mirrored
-/// relative to a map); this finds the similarity transform onto the scene.
+/// OpenF1 reports positions in its own frame: decimetres, x east and y
+/// north give or take a few degrees, about an arbitrary origin. This finds
+/// the similarity transform onto the scene.
 Future<AlignmentResult> alignToLap({
   required RaceRepository repository,
   required RaceSession session,

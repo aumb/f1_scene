@@ -223,8 +223,8 @@ class EnvironmentMeshBuilder {
     for (var r = 0; r + 1 < n; r++) {
       for (var c = 0; c + 1 < n; c++) {
         final v00 = r * n + c, v01 = v00 + 1, v10 = v00 + n, v11 = v10 + 1;
-        // Rows run north (-Z), columns east (+X): this order faces up.
-        indices.addAll([v00, v01, v10, v01, v11, v10]);
+        // Rows run north (+Z), columns east (+X): this order faces up.
+        indices.addAll([v00, v10, v01, v01, v10, v11]);
       }
     }
 
@@ -244,8 +244,8 @@ class EnvironmentMeshBuilder {
       }
     }
 
-    skirt([for (var c = 0; c < n; c++) (0, c)], Vector3(0, 0, 1)); // south
-    skirt([for (var c = 0; c < n; c++) (n - 1, c)], Vector3(0, 0, -1)); // north
+    skirt([for (var c = 0; c < n; c++) (0, c)], Vector3(0, 0, -1)); // south
+    skirt([for (var c = 0; c < n; c++) (n - 1, c)], Vector3(0, 0, 1)); // north
     skirt([for (var r = 0; r < n; r++) (r, 0)], Vector3(-1, 0, 0)); // west
     skirt([for (var r = 0; r < n; r++) (r, n - 1)], Vector3(1, 0, 0)); // east
     return _arrays(positions, normals, colors, indices);

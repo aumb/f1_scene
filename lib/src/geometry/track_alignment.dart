@@ -74,11 +74,11 @@ AlignmentResult alignToPath({
   final (tx, ty) = _centroid(target);
   final scale0 = _rmsRadius(target, tx, ty) / _rmsRadius(source, sx, sy);
 
-  // OpenF1's frame is north-up with the opposite handedness to the scene
-  // (checked on every 2024 venue), so try that first and only sweep every
+  // OpenF1's frame is the scene's, give or take a few degrees (checked on
+  // every venue raced 2023-2025), so try that first and only sweep every
   // orientation when it does not fit.
   final candidates = [
-    (mirrored: true, degrees: 0),
+    (mirrored: false, degrees: 0),
     for (final mirrored in [false, true])
       for (var degrees = 0; degrees < 360; degrees += 15)
         (mirrored: mirrored, degrees: degrees),
