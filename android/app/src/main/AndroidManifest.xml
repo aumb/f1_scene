@@ -1,4 +1,6 @@
 <manifest xmlns:android="http://schemas.android.com/apk/res/android">
+    <!-- Race data comes from the OpenF1 API. -->
+    <uses-permission android:name="android.permission.INTERNET"/>
     <application
         android:label="f1_scene"
         android:name="${applicationName}"

@@ -14,6 +14,12 @@ folder keeps its upstream license.
 | `widths/` | Track width profiles | [Makakashan/F1TrackViewer](https://github.com/Makakashan/F1TrackViewer), derived from [TUMFTM/racetrack-database](https://github.com/TUMFTM/racetrack-database) | [LGPL-3.0](https://www.gnu.org/licenses/lgpl-3.0.html) |
 | `index.json` | Circuit names and countries | [Makakashan/F1TrackViewer](https://github.com/Makakashan/F1TrackViewer) | MIT |
 
+## Race data
+
+Race timing and car positions are fetched at runtime from
+[OpenF1](https://openf1.org) (CC BY-NC-SA 4.0) and are not redistributed in
+this repository.
+
 ## Trademarks
 
 f1_scene is an unofficial fan project. It is not affiliated with, endorsed by,

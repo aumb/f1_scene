@@ -5,10 +5,12 @@ import 'package:vector_math/vector_math.dart' as vm;
 
 import '../data/circuit.dart';
 import '../geometry/track_mesh.dart';
+import '../race/race_replay.dart';
+import 'cars_layer.dart';
 
 /// Owns the flutter_scene [Scene] for a circuit diorama: a dark base slab,
-/// the extruded track ribbon, a start/finish line, lights and an orbit
-/// camera.
+/// the extruded track ribbon, a start/finish line, lights, an orbit camera
+/// and, during a replay, the cars.
 ///
 /// Plain Dart, no widgets; `TrackScreen` displays it.
 class TrackScene {
@@ -22,6 +24,8 @@ class TrackScene {
   TrackMeshBuilder? _builder;
   Node? _diorama;
   MeshGeometry? _surface;
+  RaceReplay? _replay;
+  CarsLayer? _cars;
 
   /// World meters between the lowest point of the track and the slab.
   static const double _plinth = 1.5;
@@ -111,8 +115,15 @@ class TrackScene {
     );
   }
 
-  /// Replaces the diorama with [circuit] and frames it.
+  Circuit? get circuit => _circuit;
+
+  /// The cross-sections the current track was built from.
+  TrackStations? get stations => _builder?.stations;
+
+  /// Replaces the diorama with [circuit] and frames it. Any race shown on
+  /// the previous circuit is removed.
   void showCircuit(Circuit circuit, TrackColorMode mode) {
+    showRace(null);
     final diorama = _diorama;
     if (diorama != null) scene.remove(diorama);
 
@@ -147,6 +158,25 @@ class TrackScene {
     _diorama = root;
     _surface = surface;
     frameCircuit();
+  }
+
+  /// Shows the cars of [replay] on the current circuit, or none. The caller
+  /// keeps ownership of the replay.
+  void showRace(RaceReplay? replay) {
+    final cars = _cars;
+    if (cars != null) scene.remove(cars.root);
+    _replay = replay;
+    _cars = replay == null ? null : CarsLayer(replay.drivers);
+    if (_cars case final cars?) scene.add(cars.root);
+  }
+
+  /// Per-frame update: advances the replay and poses the cars.
+  void tick(double deltaSeconds) {
+    final replay = _replay, cars = _cars;
+    if (replay == null || cars == null) return;
+    replay.tick(deltaSeconds);
+    // Grow cars with distance so they stay readable from far away.
+    cars.update(replay.poses(), scale: (orbit.distance / 300).clamp(1.0, 10.0));
   }
 
   /// Re-tints the driving surface without rebuilding anything else.

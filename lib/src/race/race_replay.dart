@@ -1,0 +1,292 @@
+import 'dart:async';
+import 'dart:math' as math;
+
+import 'package:flutter/foundation.dart';
+import 'package:vector_math/vector_math.dart';
+
+import '../geometry/point_grid.dart';
+import '../geometry/track_alignment.dart';
+import '../geometry/track_mesh.dart';
+import 'location_timeline.dart';
+import 'race_models.dart';
+import 'race_repository.dart';
+
+/// Where a car is at some moment, in scene space.
+class CarPose {
+  const CarPose(this.position, this.heading);
+
+  /// On the track surface.
+  final Vector3 position;
+
+  /// Yaw in radians about +Y; 0 faces +Z.
+  final double heading;
+}
+
+/// Plays back one race: owns its data, the alignment from OpenF1's circuit
+/// frame onto the scene, and the playback clock.
+///
+/// Times are seconds since [session] start ([RaceSession.start]).
+class RaceReplay extends ChangeNotifier {
+  RaceReplay._({
+    required this.session,
+    required this.drivers,
+    required this.alignment,
+    required this._repository,
+    required this._stations,
+    required this._leaderLapStarts,
+    required this.raceStart,
+    required double end,
+  }) : _stationGrid = PointGrid(
+         [for (final c in _stations.center) c.x],
+         [for (final c in _stations.center) c.z],
+       ),
+       timeline = LocationTimeline(start: raceStart - _preRoll, end: end) {
+    time.value = raceStart - 15;
+  }
+
+  /// Loads everything needed to start playback of [session] on a circuit
+  /// sampled as [stations].
+  static Future<RaceReplay> load({
+    required RaceRepository repository,
+    required RaceSession session,
+    required TrackStations stations,
+  }) async {
+    final (drivers, laps) = await (
+      repository.drivers(session.sessionKey),
+      repository.laps(session.sessionKey),
+    ).wait;
+    if (drivers.isEmpty || laps.isEmpty) {
+      throw StateError('OpenF1 has no timing for ${session.meetingName}');
+    }
+
+    double since(DateTime t) =>
+        t.difference(session.start).inMicroseconds / 1e6;
+
+    // The earliest start of each lap number is the leader starting it.
+    final lapStarts = <int, double>{};
+    var lastFinish = 0.0;
+    for (final lap in laps) {
+      final start = lap.start;
+      if (start == null) continue;
+      final t = since(start);
+      lapStarts.update(lap.lapNumber, (v) => math.min(v, t), ifAbsent: () => t);
+      lastFinish = math.max(lastFinish, t + (lap.duration ?? 0));
+    }
+    final lapCount = lapStarts.keys.reduce(math.max);
+    final leaderLapStarts = [
+      for (var n = 1; n <= lapCount; n++) lapStarts[n] ?? double.infinity,
+    ];
+
+    // Fit OpenF1's frame to the scene from one clean racing lap.
+    final reference = _referenceLap(laps);
+    final batch = await repository.locations(
+      session.sessionKey,
+      epoch: session.start,
+      from: reference.start!,
+      to: reference.start!.add(
+        Duration(milliseconds: (reference.duration! * 1000).round() + 500),
+      ),
+      driver: reference.driverNumber,
+    );
+    final samples = batch.samples[reference.driverNumber];
+    if (samples == null || samples.t.length < 50) {
+      throw StateError('Not enough position data to align the circuit');
+    }
+    final alignment = alignToPath(
+      source: [
+        for (var i = 0; i < samples.t.length; i++) (samples.x[i], samples.y[i]),
+      ],
+      target: [for (final c in stations.center) (c.x, c.z)],
+    );
+    debugPrint(
+      'Aligned ${session.meetingName} ${session.year}: '
+      '${alignment.transform}, rms ${alignment.rmsError.toStringAsFixed(1)} m',
+    );
+
+    return RaceReplay._(
+      session: session,
+      drivers: drivers,
+      alignment: alignment,
+      repository: repository,
+      stations: stations,
+      leaderLapStarts: leaderLapStarts,
+      raceStart: leaderLapStarts.first,
+      end: lastFinish + 60,
+    );
+  }
+
+  /// A representative lap: early in the race, not out of the pits, and
+  /// near the median lap time (no safety car or incident).
+  static RaceLap _referenceLap(List<RaceLap> laps) {
+    final timed = laps
+        .where(
+          (l) =>
+              l.start != null &&
+              l.duration != null &&
+              !l.isPitOutLap &&
+              l.lapNumber > 2,
+        )
+        .toList();
+    if (timed.isEmpty) throw StateError('No timed laps to align with');
+    final durations = timed.map((l) => l.duration!).toList()..sort();
+    final median = durations[durations.length ~/ 2];
+    return timed.firstWhere(
+      (l) => l.duration! < median * 1.05,
+      orElse: () => timed.first,
+    );
+  }
+
+  /// How much of the formation lap to show before lights out.
+  static const double _preRoll = 300;
+
+  final RaceSession session;
+  final List<RaceDriver> drivers;
+  final AlignmentResult alignment;
+
+  /// Lights out, in seconds since session start.
+  final double raceStart;
+  final LocationTimeline timeline;
+
+  final RaceRepository _repository;
+  final TrackStations _stations;
+  final PointGrid _stationGrid;
+  final List<double> _leaderLapStarts;
+  final _headings = <int, double>{};
+  final _retryAfter = <int, DateTime>{};
+  bool _disposed = false;
+
+  /// The playhead. Changes every frame while playing, so it notifies on its
+  /// own rather than through this object.
+  final time = ValueNotifier<double>(0);
+
+  bool get playing => _playing;
+  bool _playing = false;
+
+  double get speed => _speed;
+  double _speed = 1;
+
+  /// True while playback waits for position data.
+  bool get buffering => _buffering;
+  bool _buffering = false;
+
+  int get lapCount => _leaderLapStarts.length;
+
+  /// The leader's lap at [t]; 0 before the start.
+  int lapAt(double t) {
+    var lap = 0;
+    while (lap < _leaderLapStarts.length && _leaderLapStarts[lap] <= t) {
+      lap++;
+    }
+    return lap;
+  }
+
+  void play() {
+    if (time.value >= timeline.end) time.value = timeline.start;
+    _playing = true;
+    notifyListeners();
+  }
+
+  void pause() {
+    _playing = false;
+    _setBuffering(false);
+    notifyListeners();
+  }
+
+  set speed(double value) {
+    _speed = value;
+    notifyListeners();
+  }
+
+  void seek(double t) {
+    time.value = t.clamp(timeline.start, timeline.end);
+    _requestChunks();
+  }
+
+  /// Advances playback by [dt] wall-clock seconds.
+  void tick(double dt) {
+    _requestChunks();
+    if (!_playing) return;
+    if (!timeline.isReady(time.value)) {
+      _setBuffering(true);
+      return;
+    }
+    _setBuffering(false);
+    final next = time.value + dt * _speed;
+    if (next >= timeline.end) {
+      time.value = timeline.end;
+      pause();
+    } else {
+      time.value = next;
+    }
+  }
+
+  /// Every driver with data at the playhead, in scene space.
+  Map<int, CarPose> poses() {
+    final t = time.value;
+    return {for (final d in drivers) d.number: ?_poseOf(d.number, t)};
+  }
+
+  CarPose? _poseOf(int driver, double t) {
+    final raw = timeline.positionAt(driver, t);
+    if (raw == null) return null;
+    final (x, z) = alignment.transform.apply(raw.$1, raw.$2);
+    final station = _stationGrid.nearest(x, z).index;
+    final y = _stations.center[station].y;
+
+    // Heading from motion; hold the last one while the car is stopped.
+    final before = timeline.positionAt(driver, t - 0.4);
+    final after = timeline.positionAt(driver, t + 0.4);
+    if (before != null && after != null) {
+      final (bx, bz) = alignment.transform.apply(before.$1, before.$2);
+      final (ax, az) = alignment.transform.apply(after.$1, after.$2);
+      if ((ax - bx) * (ax - bx) + (az - bz) * (az - bz) > 1) {
+        _headings[driver] = math.atan2(ax - bx, az - bz);
+      }
+    }
+    return CarPose(Vector3(x, y, z), _headings[driver] ?? 0);
+  }
+
+  void _requestChunks() {
+    final ahead = _speed >= 16 ? 2 : 1;
+    for (final chunk in timeline.wanted(time.value, ahead: ahead)) {
+      final retry = _retryAfter[chunk];
+      if (retry != null && DateTime.now().isBefore(retry)) continue;
+      _loadChunk(chunk);
+    }
+  }
+
+  Future<void> _loadChunk(int chunk) async {
+    timeline.markLoading(chunk);
+    final (from, to) = timeline.chunkRange(chunk);
+    DateTime at(double t) =>
+        session.start.add(Duration(microseconds: (t * 1e6).round()));
+    try {
+      final batch = await _repository.locations(
+        session.sessionKey,
+        epoch: session.start,
+        from: at(from),
+        to: at(to),
+      );
+      if (_disposed) return;
+      timeline.addChunk(chunk, batch);
+    } catch (e) {
+      if (_disposed) return;
+      debugPrint('Location chunk $chunk failed: $e');
+      timeline.markFailed(chunk);
+      _retryAfter[chunk] = DateTime.now().add(const Duration(seconds: 5));
+    }
+  }
+
+  void _setBuffering(bool value) {
+    if (_buffering == value) return;
+    _buffering = value;
+    notifyListeners();
+  }
+
+  @override
+  void dispose() {
+    _disposed = true;
+    time.dispose();
+    super.dispose();
+  }
+}
