@@ -1,5 +1,3 @@
-import 'package:f1_scene/src/geometry/track_mesh.dart';
-import 'package:f1_scene/src/geometry/track_projector.dart';
 import 'package:f1_scene/src/race/car_motion.dart';
 import 'package:f1_scene/src/race/traffic.dart';
 import 'package:flutter_test/flutter_test.dart';
@@ -7,8 +5,7 @@ import 'package:flutter_test/flutter_test.dart';
 import '../support/circuits.dart';
 
 void main() {
-  final stations = TrackStations.sample(loadCircuit('bh-2002'));
-  final track = TrackProjector(stations);
+  final (:stations, :track) = bahrain();
   final traffic = TrafficSeparation(track);
   final mps = track.metersPerStation;
 

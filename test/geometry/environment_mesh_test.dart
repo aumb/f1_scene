@@ -1,13 +1,11 @@
-import 'dart:typed_data';
-
 import 'package:f1_scene/src/data/circuit_environment.dart';
 import 'package:f1_scene/src/geometry/environment_mesh.dart';
-import 'package:f1_scene/src/geometry/track_mesh.dart';
-import 'package:f1_scene/src/geometry/track_projector.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:vector_math/vector_math.dart';
 
 import '../support/circuits.dart';
+import '../support/environment.dart';
+import '../support/mesh.dart';
 
 double area(List<Vector2> ring, List<(int, int, int)> triangles) {
   var sum = 0.0;
@@ -48,34 +46,15 @@ void main() {
   });
 
   group('environment around Bahrain', () {
-    final stations = TrackStations.sample(loadCircuit('bh-2002'));
-    final track = TrackProjector(stations);
-    final lo =
-        stations.center.map((c) => c.x).reduce((a, b) => a < b ? a : b) - 1000;
-    final hi =
-        stations.center.map((c) => c.x).reduce((a, b) => a > b ? a : b) + 1000;
-    final south =
-        stations.center.map((c) => c.z).reduce((a, b) => a < b ? a : b) - 1000;
-    final north =
-        stations.center.map((c) => c.z).reduce((a, b) => a > b ? a : b) + 1000;
+    final (:stations, :track) = bahrain();
 
     /// A 30 m plateau over the whole circuit, so it would bury the track.
     CircuitEnvironment plateau({List<EnvironmentShape> buildings = const []}) =>
-        CircuitEnvironment(
-          terrain: TerrainGrid(
-            // The real grids are 64 x 64 over a similar area.
-            size: 64,
-            minX: lo,
-            maxX: hi,
-            southZ: south,
-            northZ: north,
-            heights: Float64List(64 * 64)..fillRange(0, 64 * 64, 30),
-          ),
-          water: const [],
-          landuse: const [],
-          roads: const [],
-          buildings: buildings,
-        );
+        flatEnvironment(stations, height: 30, buildings: buildings);
+
+    // A point well inside the grid's south-west corner, far from the track.
+    final grid = plateau().terrain;
+    final cornerX = grid.minX + 50, cornerZ = grid.southZ + 50;
 
     test('presses the ground below the track and keeps it far away', () {
       final builder = EnvironmentMeshBuilder(plateau(), track);
@@ -89,30 +68,17 @@ void main() {
           expect(builder.groundAt(p.x, p.z), lessThan(p.y - 0.3), reason: '$i');
         }
       }
-      expect(builder.groundAt(lo + 50, south + 50), closeTo(30, 1e-6));
+      expect(builder.groundAt(cornerX, cornerZ), closeTo(30, 1e-6));
     });
 
     test('builds the ground up to the track over a valley', () {
-      final valley = CircuitEnvironment(
-        terrain: TerrainGrid(
-          size: 64,
-          minX: lo,
-          maxX: hi,
-          southZ: south,
-          northZ: north,
-          heights: Float64List(64 * 64)..fillRange(0, 64 * 64, -40),
-        ),
-        water: const [],
-        landuse: const [],
-        roads: const [],
-        buildings: const [],
-      );
+      final valley = flatEnvironment(stations, height: -40);
       final builder = EnvironmentMeshBuilder(valley, track);
       for (var i = 0; i < stations.length; i += 25) {
         final c = stations.center[i];
         expect(builder.groundAt(c.x, c.z), closeTo(c.y - 1.5, 1.0));
       }
-      expect(builder.groundAt(lo + 50, south + 50), closeTo(-40, 1e-6));
+      expect(builder.groundAt(cornerX, cornerZ), closeTo(-40, 1e-6));
     });
 
     test('skips buildings on the circuit', () {
@@ -175,8 +141,8 @@ void main() {
       // Into the 30 m plateau from below it.
       expect(
         obstacles.canSee(
-          Vector3(lo + 50, 10, south + 50),
-          Vector3(lo + 250, 10, south + 50),
+          Vector3(cornerX, 10, cornerZ),
+          Vector3(cornerX + 200, 10, cornerZ),
         ),
         isFalse,
       );
@@ -184,18 +150,11 @@ void main() {
 
     test('terrain surface faces up', () {
       final mesh = EnvironmentMeshBuilder(plateau(), track).terrainBlock(-50);
-      final surfaceTriangles = 126 * 126 * 2; // (64 * 2 - 1) - 1 squared, x2
-      for (var t = 0; t < surfaceTriangles; t++) {
-        Vector3 v(int k) {
-          final i = mesh.indices[t * 3 + k];
-          return Vector3(
-            mesh.positions[i * 3],
-            mesh.positions[i * 3 + 1],
-            mesh.positions[i * 3 + 2],
-          );
-        }
-
-        expect((v(1) - v(0)).cross(v(2) - v(0)).y, greaterThan(0));
+      // The surface comes first: the grid upsampled to 127 x 127 nodes,
+      // two triangles a cell. The skirts follow.
+      const surfaceTriangles = 126 * 126 * 2;
+      for (final normal in faceNormals(mesh).take(surfaceTriangles)) {
+        expect(normal.y, greaterThan(0));
       }
     });
   });

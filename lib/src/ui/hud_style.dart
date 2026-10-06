@@ -68,9 +68,10 @@ class Attribution extends StatelessWidget {
   static const _sources =
       'Unofficial fan project, not affiliated with Formula 1.\n\n'
       'Race data: OpenF1 (CC BY-NC-SA 4.0).\n'
-      'Track data: bacinger/f1-circuits (MIT), F1TrackViewer (MIT), '
-      'TUMFTM racetrack-database (LGPL-3.0), OpenTopoData (CC-BY 4.0).\n'
-      'Scenery: © OpenStreetMap contributors (ODbL), Open-Meteo.';
+      'Track data: bacinger/f1-circuits (MIT), F1TrackViewer (MIT) with '
+      'sector splits from FastF1 (MIT), TUMFTM racetrack-database '
+      '(LGPL-3.0), elevation from Open-Meteo and OpenTopoData (CC-BY 4.0).\n'
+      'Scenery: © OpenStreetMap contributors (ODbL), Open-Meteo (CC-BY 4.0).';
 
   @override
   Widget build(BuildContext context) {

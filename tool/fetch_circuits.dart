@@ -4,12 +4,15 @@
 //
 // Sources (see NOTICE.md for licenses):
 // - bacinger/f1-circuits: centerline GeoJSON (MIT)
-// - Makakashan/F1TrackViewer: elevation profiles, sector markers (MIT) and
+// - Makakashan/F1TrackViewer: the circuit list (index.json, from its
+//   circuits-index.json), elevation profiles, sector markers (MIT) and
 //   per-point track widths derived from TUMFTM/racetrack-database (LGPL-3.0)
 import 'dart:convert';
 import 'dart:io';
 
 const _circuitsCommit = '394d8fbe70ef2c0b0c8d23ff7bee61fa09606055';
+// Keep in step with EnvironmentRepository, which fetches the scenery from
+// the same commit at runtime.
 const _viewerCommit = '2bb6c9f7019f63c933bad124705053b7984a4a13';
 
 const _circuitsBase =

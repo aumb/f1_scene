@@ -1,5 +1,4 @@
 import '../data/data_cache.dart';
-
 import 'location_batch.dart';
 import 'openf1_client.dart';
 import 'race_models.dart';

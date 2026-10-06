@@ -4,8 +4,8 @@ import 'dart:typed_data';
 import 'package:vector_math/vector_math.dart';
 
 import '../data/circuit_environment.dart';
-import 'track_projector.dart';
 import 'mesh_arrays.dart';
+import 'track_projector.dart';
 
 /// Builds the meshes around a circuit from its [CircuitEnvironment].
 ///

@@ -31,15 +31,21 @@ void main() {
     return batch;
   }
 
+  /// Distance lost braking at 80 dm/s² for 5 s from 120 s, then holding
+  /// the lower speed.
+  double braking(double t) {
+    final since = math.max(0.0, t - 120), braked = math.min(since, 5.0);
+    return 40 * braked * braked + 400 * (since - braked);
+  }
+
   test('recovers the shared stamp error from the cars at speed', () async {
     final batch = drive({
       for (var car = 1; car <= 12; car++)
-        // 50-85 m/s, some braking, one parked.
+        // 53-83 m/s; from 120 s the even ones brake by 40 m/s over 5 s
+        // (decimetres, as OpenF1 has them). One parked.
         car: car == 12
             ? (t) => 0
-            : (t) =>
-                  (500 + 30 * car) * t -
-                  (car.isEven ? 40 * math.max(0, t - 120) * (t - 120) : 0),
+            : (t) => (500 + 30 * car) * t - (car.isEven ? braking(t) : 0),
     });
     final corrected = (await correctStampJitter(batch)).samples[1]!.t;
 

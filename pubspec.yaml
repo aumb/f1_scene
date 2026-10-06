@@ -1,10 +1,13 @@
 name: f1_scene
-description: "A new Flutter project."
+description: "Formula 1 race replays on 3D circuit dioramas, built with flutter_scene."
+repository: https://github.com/aumb/f1_scene
+issue_tracker: https://github.com/aumb/f1_scene/issues
 publish_to: 'none'
 version: 0.1.0+1
 
 environment:
   sdk: ^3.13.2
+  flutter: ">=3.47.0"
 
 dependencies:
   flutter:
@@ -27,6 +30,9 @@ flutter:
     - assets/circuits/elevations/
     - assets/circuits/markers/
     - assets/circuits/widths/
+    # What flutter_scene's build hook (hook/build.dart) compiles from .glb,
+    # .fscene and .fmat files under assets/. This app builds its meshes in
+    # code, so these stay empty; they are here for when it doesn't.
     - flutter_scene_generated/
     - path: flutter_scene_generated/metal_ios/
       platforms:

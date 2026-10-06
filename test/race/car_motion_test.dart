@@ -4,18 +4,22 @@ import 'package:f1_scene/src/geometry/track_alignment.dart';
 import 'package:f1_scene/src/geometry/track_mesh.dart';
 import 'package:f1_scene/src/geometry/track_projector.dart';
 import 'package:f1_scene/src/race/car_motion.dart';
-import 'package:f1_scene/src/race/location_timeline.dart';
 import 'package:f1_scene/src/race/location_batch.dart';
+import 'package:f1_scene/src/race/location_timeline.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:vector_math/vector_math.dart' show Matrix4, Vector3;
 
 import '../support/circuits.dart';
 
-const identity = SimilarityTransform2D(scale: 1, rotation: 0, tx: 0, ty: 0);
-
 void main() {
-  final stations = TrackStations.sample(loadCircuit('bh-2002'));
-  final track = TrackProjector(stations);
+  final (:stations, :track) = bahrain();
+
+  /// Motion on Bahrain, in the scene's own frame, with [pitLane] if given.
+  CarMotion newMotion({TrackStations? pitLane}) => CarMotion(
+    alignment: SimilarityTransform2D.identity,
+    track: track,
+    pitLane: pitLane == null ? null : TrackProjector(pitLane),
+  );
 
   /// Samples of a car driving at [speed] m/s from station [from], [lateral]
   /// meters left of the centerline and moving left at [drift] m/s, every
@@ -41,7 +45,7 @@ void main() {
   }
 
   test('follows the track through a hairpin instead of cutting it', () {
-    final motion = CarMotion(alignment: identity, track: track);
+    final motion = newMotion();
     // Bahrain T1 is around station 285.
     var maxOffCenter = 0.0;
     for (var t = 0.3; t < 6; t += 0.05) {
@@ -55,7 +59,7 @@ void main() {
   });
 
   test('moves at a steady speed between samples', () {
-    final motion = CarMotion(alignment: identity, track: track);
+    final motion = newMotion();
     Vector3 at(double t) => motion
         .pose(1, windowAround(t, from: 1000, speed: 80, lateral: 0), t)!
         .position;
@@ -79,7 +83,7 @@ void main() {
       batch.add(1, time + (random.nextDouble() * 2 - 1) * 0.015, p.x, p.z);
     }
     final timeline = LocationTimeline(start: 0, end: 20)..addChunk(0, batch);
-    final motion = CarMotion(alignment: identity, track: track);
+    final motion = newMotion();
     Vector3 at(double t) => motion
         .pose(1, timeline.windowAt(1, t, reach: CarMotion.fitHalfWidth), t)!
         .position;
@@ -92,7 +96,7 @@ void main() {
   });
 
   test('keeps the car inside the track edges', () {
-    final motion = CarMotion(alignment: identity, track: track);
+    final motion = newMotion();
     // Samples 3 m beyond the left edge (alignment error, a wide moment).
     for (var t = 0.3; t < 2; t += 0.1) {
       final pose = motion.pose(
@@ -113,7 +117,7 @@ void main() {
   });
 
   test('faces along the track when stationary on the grid', () {
-    final motion = CarMotion(alignment: identity, track: track);
+    final motion = newMotion();
     final pose = motion.pose(1, windowAround(1, from: 40, speed: 0), 1)!;
     final forward = stations.forward[40];
     expect(pose.heading, closeTo(math.atan2(forward.x, forward.z), 0.05));
@@ -122,7 +126,7 @@ void main() {
   test('turns its nose toward a lane change', () {
     for (final drift in [-3.0, 3.0]) {
       // On the main straight, moving left (positive drift) or right.
-      final motion = CarMotion(alignment: identity, track: track);
+      final motion = newMotion();
       final pose = motion.pose(
         1,
         windowAround(1, from: 100, speed: 60, lateral: 0, drift: drift),
@@ -144,11 +148,7 @@ void main() {
       List.filled(301, 5),
       closed: false,
     );
-    final motion = CarMotion(
-      alignment: identity,
-      track: track,
-      pitLane: TrackProjector(lane),
-    );
+    final motion = newMotion(pitLane: lane);
     Vector3 lanePoint(int i) => lane.center[i];
     Vector3 trackPoint(int i) => stations.center[i];
     // Two samples in the lane, then the next one back on track.
@@ -182,11 +182,7 @@ void main() {
       List.filled(301, 5),
       closed: false,
     );
-    final motion = CarMotion(
-      alignment: identity,
-      track: track,
-      pitLane: TrackProjector(lane),
-    );
+    final motion = newMotion(pitLane: lane);
     final wide = motion.pose(
       1,
       windowAround(
@@ -212,7 +208,7 @@ void main() {
   });
 
   test('pitches with the gradient and points the nose along the track', () {
-    final motion = CarMotion(alignment: identity, track: track);
+    final motion = newMotion();
     // The steepest station on the lap.
     var steepest = 0;
     for (var i = 0; i < stations.length; i++) {
@@ -238,9 +234,9 @@ void main() {
   });
 
   test('crosses the start/finish seam without a jump', () {
-    final motion = CarMotion(alignment: identity, track: track);
+    final motion = newMotion();
     final n = stations.length.toDouble();
-    Vector? last;
+    (double, double)? last;
     for (var t = 0.3; t < 3; t += 0.05) {
       final pose = motion.pose(1, windowAround(t, from: n - 20, speed: 40), t)!;
       final p = (pose.position.x, pose.position.z);
@@ -254,5 +250,3 @@ void main() {
     }
   });
 }
-
-typedef Vector = (double, double);

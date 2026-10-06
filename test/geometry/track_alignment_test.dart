@@ -19,7 +19,7 @@ import '../support/circuits.dart';
   final random = math.Random(42);
   final source = <(double, double)>[];
   final truth = <(double, double)>[];
-  // A sample every ~16 m, roughly 3.7 Hz at racing speed.
+  // A sample every ~16 m, as OpenF1 gives them (~3.85 Hz) at racing speed.
   for (var i = 0; i < stations.length; i += 8) {
     final lateral = wander == 0
         ? 0.0

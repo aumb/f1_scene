@@ -1,6 +1,5 @@
-import 'package:f1_scene/src/race/location_timeline.dart';
 import 'package:f1_scene/src/race/location_batch.dart';
-import 'package:f1_scene/src/race/openf1_client.dart';
+import 'package:f1_scene/src/race/location_timeline.dart';
 import 'package:flutter_test/flutter_test.dart';
 
 /// A chunk of samples every 0.25 s with x = 10 * t, y = -t.
@@ -64,30 +63,5 @@ void main() {
       timeline.markFailed(1);
       expect(timeline.wanted(10, ahead: 1), [1], reason: 'retry failures');
     });
-  });
-
-  test('OpenF1 filters keep comparison operators in the key', () {
-    expect(OpenF1Client.filterText('session_key', '9472'), 'session_key=9472');
-    expect(
-      OpenF1Client.filterText('date>=', '2024-03-02T15:20:00'),
-      'date%3E=2024-03-02T15%3A20%3A00',
-    );
-    expect(OpenF1Client.filterText('date<', '2024'), 'date%3C2024');
-  });
-
-  test('reads OpenF1 timestamps like DateTime.parse does', () {
-    for (final text in [
-      '2024-03-02T15:20:00.138000+00:00',
-      '2024-03-02T15:20:00+00:00',
-      '2026-12-31T23:59:59.999999+00:00',
-      '2024-02-29T00:00:00.5Z',
-      '2023-01-01T00:00:00.000000+02:00',
-    ]) {
-      expect(
-        isoSeconds(text),
-        closeTo(DateTime.parse(text).microsecondsSinceEpoch / 1e6, 1e-6),
-        reason: text,
-      );
-    }
   });
 }

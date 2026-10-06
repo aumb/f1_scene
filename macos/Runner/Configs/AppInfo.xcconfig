@@ -11,4 +11,4 @@ PRODUCT_NAME = f1_scene
 PRODUCT_BUNDLE_IDENTIFIER = dev.f1scene.f1Scene
 
 // The copyright displayed in application information
-PRODUCT_COPYRIGHT = Copyright © 2026 dev.f1scene. All rights reserved.
+PRODUCT_COPYRIGHT = Copyright © 2026 f1_scene contributors. MIT License.

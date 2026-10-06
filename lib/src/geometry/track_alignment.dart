@@ -13,6 +13,14 @@ class SimilarityTransform2D {
     this.mirrored = false,
   });
 
+  /// Leaves every point where it is.
+  static const identity = SimilarityTransform2D(
+    scale: 1,
+    rotation: 0,
+    tx: 0,
+    ty: 0,
+  );
+
   final double scale;
   final double rotation;
   final double tx;

@@ -17,6 +17,8 @@ class EnvironmentRepository {
     : _http = client ?? http.Client(),
       _dataCache = cache ?? DataCache.instance;
 
+  // Keep the commit in step with tool/fetch_circuits.dart, which vendors
+  // the circuits from it.
   static const _base =
       'https://raw.githubusercontent.com/Makakashan/F1TrackViewer/'
       '2bb6c9f7019f63c933bad124705053b7984a4a13/public/environments';

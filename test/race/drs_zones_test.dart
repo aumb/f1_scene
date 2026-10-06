@@ -1,17 +1,12 @@
 import 'package:f1_scene/src/geometry/track_alignment.dart';
-import 'package:f1_scene/src/geometry/track_mesh.dart';
-import 'package:f1_scene/src/geometry/track_projector.dart';
 import 'package:f1_scene/src/race/drs_zones.dart';
 import 'package:f1_scene/src/race/location_batch.dart';
 import 'package:flutter_test/flutter_test.dart';
 
 import '../support/circuits.dart';
 
-const identity = SimilarityTransform2D(scale: 1, rotation: 0, tx: 0, ty: 0);
-
 void main() {
-  final stations = TrackStations.sample(loadCircuit('bh-2002'));
-  final track = TrackProjector(stations);
+  final (:stations, :track) = bahrain();
   final n = stations.length;
 
   /// One car lapping at 2 stations per 0.25 s, DRS open inside [zones].
@@ -40,7 +35,7 @@ void main() {
     final zones = drsZonesFrom(
       openTimes: data.open,
       locations: data.locations,
-      transform: identity,
+      transform: SimilarityTransform2D.identity,
       track: track,
     );
     expect(zones, hasLength(2));
@@ -54,7 +49,7 @@ void main() {
     final zones = drsZonesFrom(
       openTimes: data.open,
       locations: data.locations,
-      transform: identity,
+      transform: SimilarityTransform2D.identity,
       track: track,
     );
     expect(zones, hasLength(1));
@@ -67,7 +62,7 @@ void main() {
       drsZonesFrom(
         openTimes: data.open,
         locations: data.locations,
-        transform: identity,
+        transform: SimilarityTransform2D.identity,
         track: track,
       ),
       isEmpty,

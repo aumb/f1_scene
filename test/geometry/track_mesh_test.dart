@@ -1,26 +1,9 @@
 import 'package:f1_scene/src/geometry/track_mesh.dart';
 import 'package:f1_scene/src/geometry/track_projector.dart';
 import 'package:flutter_test/flutter_test.dart';
-import 'package:vector_math/vector_math.dart';
 
 import '../support/circuits.dart';
-
-import 'package:f1_scene/src/geometry/mesh_arrays.dart';
-
-/// Face normals of every triangle, from the winding order.
-Iterable<Vector3> faceNormals(MeshArrays mesh) sync* {
-  Vector3 vertex(int i) => Vector3(
-    mesh.positions[i * 3],
-    mesh.positions[i * 3 + 1],
-    mesh.positions[i * 3 + 2],
-  );
-  for (var t = 0; t < mesh.triangleCount; t++) {
-    final a = vertex(mesh.indices[t * 3]);
-    final b = vertex(mesh.indices[t * 3 + 1]);
-    final c = vertex(mesh.indices[t * 3 + 2]);
-    yield (b - a).cross(c - a);
-  }
-}
+import '../support/mesh.dart';
 
 void main() {
   final bahrain = loadCircuit('bh-2002');
@@ -86,20 +69,6 @@ void main() {
     final widths = stations.halfWidth.map((h) => h * 2);
     expect(widths.reduce((a, b) => a < b ? a : b), closeTo(10.77, 0.5));
     expect(widths.reduce((a, b) => a > b ? a : b), closeTo(21.99, 0.5));
-  });
-
-  test('lap distance counts from the start/finish line', () {
-    expect(bahrain.sAtLapDistance(0), closeTo(bahrain.startFinishS, 1e-9));
-    // The vendored centerline differs a little in length from the official
-    // lap; the start/finish straight is straight enough to measure on.
-    final scale = bahrain.centerline.length / bahrain.lapLength;
-    final line = bahrain.centerline;
-    expect(
-      line
-          .pointAt(bahrain.sAtLapDistance(0))
-          .distanceTo(line.pointAt(bahrain.sAtLapDistance(50))),
-      closeTo(50 * scale, 1),
-    );
   });
 
   group('track details', () {

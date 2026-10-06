@@ -9,7 +9,7 @@ folder keeps its upstream license.
 | Folder | Content | Source | License |
 | --- | --- | --- | --- |
 | `layouts/` | Circuit centerlines (GeoJSON) | [bacinger/f1-circuits](https://github.com/bacinger/f1-circuits) | MIT |
-| `elevations/` | Elevation per centerline point | [Makakashan/F1TrackViewer](https://github.com/Makakashan/F1TrackViewer), generated from [OpenTopoData](https://www.opentopodata.org/) (Mapzen dataset) and [Open-Meteo](https://open-meteo.com/en/docs/elevation-api) | MIT; underlying elevation data CC-BY 4.0 |
+| `elevations/` | Elevation per centerline point | [Makakashan/F1TrackViewer](https://github.com/Makakashan/F1TrackViewer), generated from [Open-Meteo](https://open-meteo.com/en/docs/elevation-api), with [OpenTopoData](https://www.opentopodata.org/) as a fallback | MIT; underlying elevation data CC-BY 4.0 |
 | `markers/` | Start/finish and sector splits | [Makakashan/F1TrackViewer](https://github.com/Makakashan/F1TrackViewer), derived from session telemetry via [FastF1](https://github.com/theOehrly/Fast-F1) | MIT |
 | `widths/` | Track width profiles | [Makakashan/F1TrackViewer](https://github.com/Makakashan/F1TrackViewer), derived from [TUMFTM/racetrack-database](https://github.com/TUMFTM/racetrack-database) | [LGPL-3.0](https://www.gnu.org/licenses/lgpl-3.0.html) |
 | `index.json` | Circuit names and countries | [Makakashan/F1TrackViewer](https://github.com/Makakashan/F1TrackViewer) | MIT |
