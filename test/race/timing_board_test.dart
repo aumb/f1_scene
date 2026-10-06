@@ -41,7 +41,6 @@ void main() {
           start: at(100 + (n - 1) * 90 + (d == 16 ? 1.5 : 0)),
           duration: 90,
           isPitOutLap: false,
-          sectors: [30, d == 1 && n == 2 ? 29 : 30.5, 29.5],
         ),
     RaceLap(
       driverNumber: 44,
@@ -49,7 +48,6 @@ void main() {
       start: at(103),
       duration: 91,
       isPitOutLap: false,
-      sectors: [30.2, 30.6, 30.2],
     ),
   ];
 
@@ -121,20 +119,12 @@ void main() {
     expect(board.standingsAt(400).any((r) => r.retired), isFalse);
   });
 
-  test('rates sectors against the bests at the end of the lap', () {
-    // After VER's lap 2 (ends at 280): S2 29.0 is the fastest of anyone.
+  test('knows the lap, the last lap and the best so far', () {
+    // VER's lap 2 ended at 280.
     final timing = board.driverAt(1, 285);
     expect(timing.lap, 3);
     expect(timing.lastLap!.lapNumber, 2);
-    expect(timing.lastSectors, [
-      SectorRating.overallBest,
-      SectorRating.overallBest,
-      SectorRating.overallBest,
-    ]);
-    // LEC's lap 2 equals the best S1 and S3 but is slower in S2.
-    final lec = board.driverAt(16, 285);
-    expect(lec.lastSectors[1], SectorRating.personalBest);
-    expect(lec.bestLap, 90);
+    expect(board.driverAt(16, 285).bestLap, 90);
   });
 
   test('parses OpenF1 gaps', () {

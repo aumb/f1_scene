@@ -59,7 +59,6 @@ class RaceLap {
     required this.start,
     required this.duration,
     required this.isPitOutLap,
-    this.sectors = const [null, null, null],
   });
 
   final int driverNumber;
@@ -71,9 +70,6 @@ class RaceLap {
   /// Lap time in seconds, if timing recorded it.
   final double? duration;
   final bool isPitOutLap;
-
-  /// Sector times in seconds; null where timing missed one.
-  final List<double?> sectors;
 }
 
 /// A time gap that may be measured in laps instead of seconds.

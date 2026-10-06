@@ -55,17 +55,9 @@ class TowerRow {
   );
 }
 
-/// How a sector time compares with the bests set so far.
-enum SectorRating { none, slower, personalBest, overallBest }
-
 /// The followed driver's timing at a moment.
 class DriverTiming {
-  const DriverTiming({
-    required this.lap,
-    this.lastLap,
-    this.bestLap,
-    this.lastSectors = const [],
-  });
+  const DriverTiming({required this.lap, this.lastLap, this.bestLap});
 
   /// The lap being driven; 0 before the start.
   final int lap;
@@ -75,9 +67,6 @@ class DriverTiming {
 
   /// Personal best lap time so far.
   final double? bestLap;
-
-  /// [lastLap]'s sectors rated against the bests set up to its end.
-  final List<SectorRating> lastSectors;
 }
 
 /// Answers "what did the timing screens say at time t" from a race's
@@ -207,39 +196,7 @@ class TimingBoard {
         if (d != null) best = best == null ? d : math.min(best, d);
       }
     }
-    return DriverTiming(
-      lap: lap,
-      lastLap: last?.lap,
-      bestLap: best,
-      lastSectors: last == null ? const [] : _rateSectors(last),
-    );
-  }
-
-  /// Rates each sector of [lap] against the bests set by its end: purple
-  /// for the fastest of anyone, green for the driver's own best.
-  List<SectorRating> _rateSectors(_TimedLap lap) {
-    final overall = List<double>.filled(3, double.infinity);
-    final personal = List<double>.filled(3, double.infinity);
-    for (final l in _allLaps) {
-      if (l.end > lap.end) break;
-      for (var s = 0; s < 3; s++) {
-        final time = l.lap.sectors[s];
-        if (time == null) continue;
-        overall[s] = math.min(overall[s], time);
-        if (l.lap.driverNumber == lap.lap.driverNumber) {
-          personal[s] = math.min(personal[s], time);
-        }
-      }
-    }
-    return [
-      for (var s = 0; s < 3; s++)
-        switch (lap.lap.sectors[s]) {
-          null => SectorRating.none,
-          final time when time <= overall[s] => SectorRating.overallBest,
-          final time when time <= personal[s] => SectorRating.personalBest,
-          _ => SectorRating.slower,
-        },
-    ];
+    return DriverTiming(lap: lap, lastLap: last?.lap, bestLap: best);
   }
 
   int _lapOf(int driver, double t) {

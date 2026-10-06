@@ -105,14 +105,6 @@ class RaceRepository {
               : DateTime.parse(l['date_start'] as String),
           duration: (l['lap_duration'] as num?)?.toDouble(),
           isPitOutLap: l['is_pit_out_lap'] as bool? ?? false,
-          sectors: [
-            for (final k in [
-              'duration_sector_1',
-              'duration_sector_2',
-              'duration_sector_3',
-            ])
-              (l[k] as num?)?.toDouble(),
-          ],
         ),
     ];
   }
