@@ -1,3 +1,4 @@
+import 'package:f1_scene/src/scene/camera_rig.dart';
 import 'package:f1_scene/src/scene/map_camera.dart';
 import 'package:f1_scene/src/ui/scene_gestures.dart';
 import 'package:flutter/gestures.dart';

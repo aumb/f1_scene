@@ -4,8 +4,8 @@ import 'dart:math' as math;
 ///
 /// The scene's cost is mostly per pixel (shading, shadows, ambient
 /// occlusion, bloom), so on a large or high-density screen it is fill-bound:
-/// at 1920x1080 on a 2x display it renders 6 MP a frame and holds ~72 fps
-/// where 0.75 scale holds ~100. Fed every frame's interval, this lowers the
+/// in a 1920x1080 window on a 2x display, the map is ~6.4 MP a frame and
+/// holds ~72 fps where 0.75 scale holds ~100. Fed every frame's interval, this lowers the
 /// scale quickly while frames miss the display's refresh and raises it back
 /// slowly once they stop, backing off for a while when a raise doesn't fit.
 class AdaptiveResolution {

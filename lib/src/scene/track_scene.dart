@@ -1,5 +1,4 @@
 import 'dart:math' as math;
-import 'dart:ui' show Offset, Size;
 
 import 'package:flutter_scene/scene.dart';
 import 'package:vector_math/vector_math.dart' as vm;
@@ -7,123 +6,63 @@ import 'package:vector_math/vector_math.dart' as vm;
 import '../data/circuit.dart';
 import '../data/circuit_environment.dart';
 import '../geometry/environment_mesh.dart';
+import '../geometry/mesh_arrays.dart';
 import '../geometry/track_mesh.dart';
 import '../geometry/track_projector.dart';
-import '../race/car_motion.dart';
 import '../race/race_replay.dart';
+import 'camera_rig.dart';
 import 'cars_layer.dart';
-import 'map_camera.dart';
+import 'diorama_materials.dart';
+import 'mesh_upload.dart';
 import 'race_cameras.dart';
-import '../geometry/mesh_arrays.dart';
 
-enum CameraMode {
-  /// Free orbit around the whole circuit.
-  orbit,
-
-  /// Behind the followed car.
-  chase,
-
-  /// Riding on the followed car.
-  onboard,
-
-  /// Trackside broadcast cameras on the followed car.
-  tv,
-}
-
-/// Owns the flutter_scene [Scene] for a circuit diorama: a dark base slab,
-/// the extruded track ribbon, a start/finish line, lights, the cameras and,
-/// during a replay, the cars and pit lane.
+/// Owns the flutter_scene [Scene] for a circuit diorama: the extruded track
+/// with kerbs and start/finish and sector lines, a dark base slab or (once
+/// fetched) the surrounding scenery, lights and post effects, the cameras
+/// and, during a replay, the cars, pit lane and DRS zones.
 ///
 /// Plain Dart, no widgets; `TrackScreen` displays it.
-class TrackScene implements CameraInput {
+class TrackScene {
   final Scene scene = Scene();
 
-  /// Free camera around the circuit.
-  late final MapCameraController orbit;
+  /// The camera and its controllers; set up by [initialize].
+  late final CameraRig cameras;
 
-  /// Camera behind the followed car.
-  late final ChaseCameraController chase;
+  final _materials = DioramaMaterials();
 
-  /// Camera riding on the followed car.
-  late final OnboardCameraController onboard;
+  Circuit? _circuit;
+  TrackMeshBuilder? _builder;
+  TrackProjector? _projector;
+  Node? _diorama;
+  Node? _slabNode;
+  Node? _environmentNode;
+  bool _sceneryVisible = true;
 
-  late final Node _camera;
-  late final PerspectiveProjection _projection;
-  TvCameraController? _tv;
+  /// The track's skirts, which reach down into the scenery once it loads.
+  MeshGeometry? _skirts;
+
+  /// The bottom of the diorama: under the slab's top, then under the
+  /// scenery block. [_trackBaseY] stays the former.
+  double _baseY = 0, _trackBaseY = 0;
 
   /// TV posts around the plain slab, and around the scenery once loaded.
   List<TvPost> _slabPosts = const [];
   List<TvPost>? _sceneryPosts;
-  CameraMode _cameraMode = CameraMode.orbit;
-  int? _followed;
-  Map<int, CarPose> _poses = const {};
 
-  Circuit? _circuit;
-  TrackMeshBuilder? _builder;
-  Node? _diorama;
-  MeshGeometry? _skirts;
-  Node? _slabNode;
-  Node? _environmentNode;
-  bool _sceneryVisible = true;
   RaceReplay? _replay;
   CarsLayer? _cars;
   Node? _raceRoot;
+  MeshGeometry? _pitSkirts;
   Node? _drsNode;
-  double _baseY = 0;
 
-  /// World meters between the lowest point of the track and the slab.
+  /// Meters between the lowest point of the track and the slab's top.
   static const double _plinth = 1.5;
 
-  /// Margin of slab around the track, in meters.
-  static const double _slabMargin = 160;
-  static const double _slabThickness = 40;
+  /// Margin of slab around the track, and its thickness, in meters.
+  static const double _slabMargin = 160, _slabThickness = 40;
 
-  static const double _fovY = 35 * vm.degrees2Radians;
-  static const double _defaultAzimuth = 0.5;
-  static const double _defaultPolar = 0.8;
-
-  final _surfaceMaterial = PhysicallyBasedMaterial()
-    ..metallicFactor = 0
-    ..roughnessFactor = 0.5;
-  final _skirtMaterial = PhysicallyBasedMaterial()
-    ..baseColorFactor = linearColor(0x2C3038)
-    ..metallicFactor = 0
-    ..roughnessFactor = 0.8;
-  final _terrainMaterial = PhysicallyBasedMaterial()
-    ..metallicFactor = 0
-    ..roughnessFactor = 0.95;
-  final _buildingMaterial = PhysicallyBasedMaterial()
-    ..metallicFactor = 0
-    ..roughnessFactor = 0.8;
-  final _roadMaterial = PhysicallyBasedMaterial()
-    ..metallicFactor = 0
-    ..roughnessFactor = 0.85
-    // Draped just above the ground; win any tie with it.
-    ..depthLayer = 1;
-  final _waterMaterial = PhysicallyBasedMaterial()
-    ..metallicFactor = 0
-    ..roughnessFactor = 0.15
-    ..depthLayer = 1;
-  final _slabMaterial = PhysicallyBasedMaterial()
-    ..baseColorFactor = linearColor(0x1A1D23)
-    ..metallicFactor = 0
-    ..roughnessFactor = 0.95;
-  // Markings lie flush on the track surface and win the depth tie by
-  // layer: kerbs over the surface, DRS bands over kerbs, lines over all.
-  final _kerbMaterial = _overlay(depthLayer: 1);
-  final _drsMaterial = _overlay(depthLayer: 2);
-  final _lineMaterial = _overlay(depthLayer: 3);
-
-  static PhysicallyBasedMaterial _overlay({required int depthLayer}) =>
-      PhysicallyBasedMaterial()
-        ..metallicFactor = 0
-        ..roughnessFactor = 0.6
-        ..depthLayer = depthLayer;
-  final _pitMaterial = PhysicallyBasedMaterial()
-    ..metallicFactor = 0
-    ..roughnessFactor = 0.7
-    // Where the pit lane merges into the track, the track wins.
-    ..depthLayer = -1;
+  /// Depth of the scenery block below its lowest ground, in meters.
+  static const double _blockDepth = 25;
 
   Future<void> initialize() async {
     await Scene.initializeStaticResources();
@@ -158,142 +97,8 @@ class TrackScene implements CameraInput {
       shadowDepthBias: 1.0,
       shadowNormalBias: 2.0,
     );
-
-    orbit = MapCameraController(azimuth: _defaultAzimuth, polar: _defaultPolar)
-      ..camera = () => _cameraComponent.toCamera();
-    chase = ChaseCameraController()..target = _followedPose;
-    onboard = OnboardCameraController()..target = _followedPose;
-    _projection = PerspectiveProjection(
-      fovRadiansY: _fovY,
-      near: 1,
-      far: 40000,
-    );
-    _cameraComponent = CameraComponent(
-      projection: _projection,
-      activateOnMount: true,
-    );
-    _camera = Node(name: 'camera');
-    scene.add(
-      _camera
-        ..addComponent(_cameraComponent)
-        ..addComponent(orbit),
-    );
+    cameras = CameraRig(scene);
   }
-
-  late final CameraComponent _cameraComponent;
-
-  // Camera input, routed to whichever camera is active. TV cameras take
-  // none; the chase camera has no pan, so a pan swings it round the car.
-
-  /// Whether the orbit camera still shows the framing it was given, so a
-  /// change of viewport (the window, the layout settling) re-frames it.
-  /// Moving the camera by hand ends that.
-  bool _framed = false;
-
-  @override
-  set viewportSize(Size size) {
-    final changed = size != orbit.viewportSize;
-    orbit.viewportSize = size;
-    chase.viewportSize = size;
-    onboard.viewportSize = size;
-    if (changed && _framed) frameCircuit();
-  }
-
-  @override
-  void orbitDrag(Offset delta) {
-    if (_cameraMode == CameraMode.orbit) _framed = false;
-    switch (_cameraMode) {
-      case CameraMode.orbit:
-        final k = math.pi / math.max(1.0, orbit.viewportSize.height);
-        // Drag down to look from higher up, as in map apps.
-        orbit.orbitBy(-delta.dx * k, delta.dy * k);
-      case CameraMode.chase:
-        chase.handleDragUpdate(delta);
-      case CameraMode.onboard:
-        onboard.handleDragUpdate(delta);
-      case CameraMode.tv:
-        break;
-    }
-  }
-
-  @override
-  void rotate(double radians) {
-    if (_cameraMode == CameraMode.orbit) _framed = false;
-    switch (_cameraMode) {
-      case CameraMode.orbit:
-        orbit.orbitBy(radians, 0);
-      case CameraMode.chase:
-        chase.yawOffset += radians;
-      case CameraMode.onboard:
-        onboard.lookYaw += radians;
-      case CameraMode.tv:
-        break;
-    }
-  }
-
-  @override
-  void panDrag(Offset from, Offset to) {
-    if (_cameraMode == CameraMode.orbit) _framed = false;
-    switch (_cameraMode) {
-      case CameraMode.orbit:
-        orbit.dragGround(from, to);
-      case CameraMode.chase:
-        chase.handleDragUpdate(to - from);
-      case CameraMode.onboard:
-        onboard.handleDragUpdate(to - from);
-      case CameraMode.tv:
-        break;
-    }
-  }
-
-  @override
-  void zoomAt(double factor, Offset focal) {
-    if (_cameraMode == CameraMode.orbit) _framed = false;
-    switch (_cameraMode) {
-      case CameraMode.orbit:
-        orbit.zoomAt(factor, focal);
-      case CameraMode.chase:
-        chase.distance = (chase.distance / factor).clamp(6.0, 200.0);
-      case CameraMode.onboard || CameraMode.tv:
-        break;
-    }
-  }
-
-  CameraMode get cameraMode => _cameraMode;
-
-  /// Switches the camera. Chase and TV film [followedDriver].
-  set cameraMode(CameraMode mode) {
-    if (mode == _cameraMode) return;
-    _camera.removeComponent(activeController);
-    _cameraMode = mode;
-    // Onboard wants the wide lens a car-mounted camera has.
-    _projection.fovRadiansY = mode == CameraMode.onboard
-        ? 62 * vm.degrees2Radians
-        : _fovY;
-    chase.reset();
-    onboard.reset();
-    _tv?.reset();
-    _camera.addComponent(activeController);
-  }
-
-  /// The controller driving the camera now, for `CameraControls`.
-  CameraController get activeController => switch (_cameraMode) {
-    CameraMode.orbit => orbit,
-    CameraMode.chase => chase,
-    CameraMode.onboard => onboard,
-    CameraMode.tv => _tv ?? orbit,
-  };
-
-  /// The driver the chase and TV cameras film, outlined in orbit view.
-  int? get followedDriver => _followed;
-  set followedDriver(int? driver) {
-    _followed = driver;
-    chase.reset();
-    onboard.reset();
-    _tv?.reset();
-  }
-
-  CarPose? _followedPose() => _poses[_followed];
 
   Circuit? get circuit => _circuit;
 
@@ -304,75 +109,57 @@ class TrackScene implements CameraInput {
   /// the previous circuit is removed.
   void showCircuit(Circuit circuit) {
     showRace(null);
-    final diorama = _diorama;
-    if (diorama != null) scene.remove(diorama);
+    final previous = _diorama;
+    if (previous != null) scene.remove(previous);
 
     final stations = TrackStations.sample(circuit);
     final builder = TrackMeshBuilder(circuit, stations);
+    final projector = TrackProjector(stations);
     final baseY = circuit.lowestElevation - _plinth;
 
-    final surface = _geometry(builder.surface());
-    // Updatable, so the skirts can reach down into terrain that arrives
+    // Updatable, so the skirts can reach down into scenery that arrives
     // later.
-    final skirts = _geometry(
+    final skirts = uploadMesh(
       builder.skirts(baseY),
       storage: GeometryStorage.updatable,
     );
-    final trackMesh = Mesh.primitives(
+    final track = Mesh.primitives(
       primitives: [
-        MeshPrimitive(surface, _surfaceMaterial),
-        MeshPrimitive(skirts, _skirtMaterial),
+        MeshPrimitive(uploadMesh(builder.surface()), _materials.surface),
+        MeshPrimitive(skirts, _materials.skirt),
       ],
     );
     final root = Node(name: 'diorama ${circuit.summary.id}')
       ..add(_slabNode = _slab(circuit, baseY))
-      ..add(Node(name: 'track', mesh: trackMesh))
-      ..add(
-        Node(
-          name: 'kerbs',
-          mesh: Mesh(_geometry(builder.kerbs()), _kerbMaterial),
-        )..shadowCastingMode = ShadowCastingMode.off,
-      )
-      ..add(
-        Node(
-          name: 'start-finish',
-          mesh: Mesh(_geometry(builder.startFinishLine()), _lineMaterial),
-        )..shadowCastingMode = ShadowCastingMode.off,
-      );
+      ..add(Node(name: 'track', mesh: track))
+      ..add(_flat('kerbs', builder.kerbs(), _materials.kerb))
+      ..add(_flat('start-finish', builder.startFinishLine(), _materials.line));
     if (circuit.sectorStarts.length > 1) {
-      root.add(
-        Node(
-          name: 'sector lines',
-          mesh: Mesh(_geometry(builder.sectorLines()), _lineMaterial),
-        )..shadowCastingMode = ShadowCastingMode.off,
-      );
+      root.add(_flat('sector lines', builder.sectorLines(), _materials.line));
     }
-    _markStatic(root);
+    markStaticShadows(root);
     scene.add(root);
 
     _circuit = circuit;
     _builder = builder;
+    _projector = projector;
     _diorama = root;
     _skirts = skirts;
     _environmentNode = null;
-    _baseY = baseY;
-
-    final projector = TrackProjector(stations);
+    _baseY = _trackBaseY = baseY;
     _slabPosts = TvCameraController.placePosts(stations, projector);
     _sceneryPosts = null;
-    final tv = TvCameraController(
-      posts: _slabPosts,
+    cameras.setTrack(
+      bounds: circuit.bounds,
       track: projector,
-      projection: _projection,
-    )..target = _followedPose;
-    if (_cameraMode == CameraMode.tv) {
-      _camera
-        ..removeComponent(activeController)
-        ..addComponent(tv);
-    }
-    _tv = tv;
-    frameCircuit();
+      posts: _slabPosts,
+    );
   }
+
+  /// A mesh lying on the track, too thin to cast a shadow.
+  static Node _flat(String name, MeshArrays arrays, Material material) =>
+      Node(name: name, mesh: Mesh(uploadMesh(arrays), material))
+        ..shadowCastingMode = ShadowCastingMode.off;
 
   /// Whether the terrain, buildings and roads around the circuit show (when
   /// loaded); otherwise the plain slab does.
@@ -382,80 +169,58 @@ class TrackScene implements CameraInput {
     final environment = _environmentNode;
     environment?.visible = visible;
     _slabNode?.visible = environment == null || !visible;
-    final posts = visible ? _sceneryPosts ?? _slabPosts : _slabPosts;
-    final tv = _tv;
-    if (tv != null && !identical(tv.posts, posts)) {
-      tv
-        ..posts = posts
-        ..reset();
-    }
+    cameras.tvPosts = visible ? _sceneryPosts ?? _slabPosts : _slabPosts;
   }
 
   /// Surrounds the current circuit with [environment] in place of the slab.
   void showEnvironment(CircuitEnvironment environment) {
-    final root = _diorama, builder = _builder, skirts = _skirts;
-    if (root == null || builder == null || skirts == null) return;
+    final root = _diorama, builder = _builder, projector = _projector;
+    if (root == null || builder == null || projector == null) return;
     final previous = _environmentNode;
     if (previous != null) root.remove(previous);
 
-    final meshes = EnvironmentMeshBuilder(
-      environment,
-      TrackProjector(builder.stations),
-    );
-    final baseY = math.min(meshes.lowestGround, _baseY) - 25;
+    final meshes = EnvironmentMeshBuilder(environment, projector);
+    final baseY = math.min(meshes.lowestGround, _trackBaseY) - _blockDepth;
     final node = Node(name: 'environment')
       ..add(
         Node(
           name: 'terrain',
-          mesh: Mesh(_geometry(meshes.terrainBlock(baseY)), _terrainMaterial),
+          mesh: Mesh(
+            uploadMesh(meshes.terrainBlock(baseY)),
+            _materials.terrain,
+          ),
         ),
       )
       ..add(
         Node(
           name: 'buildings',
-          mesh: Mesh(_geometry(meshes.buildings()), _buildingMaterial),
+          mesh: Mesh(uploadMesh(meshes.buildings()), _materials.building),
         ),
       )
-      ..add(
-        Node(
-          name: 'roads',
-          mesh: Mesh(_geometry(meshes.roads()), _roadMaterial),
-        )..shadowCastingMode = ShadowCastingMode.off,
-      )
-      ..add(
-        Node(
-          name: 'water',
-          mesh: Mesh(_geometry(meshes.water()), _waterMaterial),
-        )..shadowCastingMode = ShadowCastingMode.off,
-      );
+      ..add(_flat('roads', meshes.roads(), _materials.road))
+      ..add(_flat('water', meshes.water(), _materials.water));
     final trees = meshes.trees();
     if (trees.isNotEmpty) node.add(_trees(trees));
-    _markStatic(node);
+    markStaticShadows(node);
     root.add(node);
     _environmentNode = node;
 
     // TV posts that stand clear of the buildings and see past them.
     _sceneryPosts = TvCameraController.placePosts(
       builder.stations,
-      TrackProjector(builder.stations),
+      projector,
       obstacles: meshes.obstacles,
     );
 
     // Reach the skirts down into the block, so no gap opens under the
-    // ribbon where the ground falls away.
+    // track or pit lane where the ground falls away.
     _baseY = baseY;
-    skirts.updatePositions(builder.skirts(baseY).positions);
-    sceneryVisible = _sceneryVisible;
-  }
-
-  /// Flags every node under [node] as a static shadow caster, so the
-  /// engine caches its shadow map instead of redrawing it each frame. Only
-  /// for content that never moves.
-  static void _markStatic(Node node) {
-    node.shadowStatic = true;
-    for (final child in node.children) {
-      _markStatic(child);
+    _skirts?.updatePositions(builder.skirts(baseY).positions);
+    final pitLane = _replay?.pitLane;
+    if (pitLane != null) {
+      _pitSkirts?.updatePositions(ribbonSkirts(pitLane, baseY).positions);
     }
+    sceneryVisible = _sceneryVisible;
   }
 
   Node _trees(List<vm.Vector3> positions) {
@@ -467,10 +232,7 @@ class TrackScene implements CameraInput {
         height: 8,
         radialSegments: 7,
       ),
-      material: PhysicallyBasedMaterial()
-        ..baseColorFactor = linearColor(0x35593C)
-        ..metallicFactor = 0
-        ..roughnessFactor = 0.9,
+      material: _materials.tree,
       cullInstances: true,
     );
     for (final p in positions) {
@@ -496,8 +258,9 @@ class TrackScene implements CameraInput {
     if (previous != null) scene.remove(previous);
     _replay?.drsZones.removeListener(_showDrsZones);
     _drsNode = null;
+    _pitSkirts = null;
     _replay = replay;
-    _poses = const {};
+    cameras.poses = const {};
     _cars = null;
     _raceRoot = null;
     if (replay == null) return;
@@ -506,31 +269,33 @@ class TrackScene implements CameraInput {
     final root = Node(name: 'race')..add(cars.root);
     final pitLane = replay.pitLane;
     if (pitLane != null) {
+      final skirts = uploadMesh(
+        ribbonSkirts(pitLane, _baseY),
+        storage: GeometryStorage.updatable,
+      );
       root.add(
         Node(
           name: 'pit lane',
           mesh: Mesh.primitives(
             primitives: [
               MeshPrimitive(
-                _geometry(ribbonSurface(pitLane, linearColor(0x3A3E46))),
-                _pitMaterial,
+                uploadMesh(ribbonSurface(pitLane, linearColor(0x3A3E46))),
+                _materials.pit,
               ),
-              MeshPrimitive(
-                _geometry(ribbonSkirts(pitLane, _baseY)),
-                _skirtMaterial,
-              ),
+              MeshPrimitive(skirts, _materials.skirt),
             ],
           ),
         )..shadowStatic = true,
       );
+      _pitSkirts = skirts;
     }
     scene.add(root);
     _cars = cars;
     _raceRoot = root;
     replay.drsZones.addListener(_showDrsZones);
     _showDrsZones();
-    if (!replay.drivers.any((d) => d.number == _followed)) {
-      followedDriver = replay.featuredDriver;
+    if (!replay.drivers.any((d) => d.number == cameras.followedDriver)) {
+      cameras.followedDriver = replay.featuredDriver;
     }
   }
 
@@ -542,15 +307,8 @@ class TrackScene implements CameraInput {
     if (previous != null) root.remove(previous);
     final zones = replay.drsZones.value;
     if (zones.isEmpty) return;
-    final node = Node(
-      name: 'drs zones',
-      mesh: Mesh(
-        _geometry(builder.drsBands([for (final z in zones) (z.start, z.end)])),
-        _drsMaterial,
-      ),
-    )..shadowCastingMode = ShadowCastingMode.off;
-    root.add(node);
-    _drsNode = node;
+    final bands = builder.drsBands([for (final z in zones) (z.start, z.end)]);
+    root.add(_drsNode = _flat('drs zones', bands, _materials.drs));
   }
 
   /// Per-frame update: advances the replay and poses the cars. Runs before
@@ -559,37 +317,14 @@ class TrackScene implements CameraInput {
     final replay = _replay, cars = _cars;
     if (replay == null || cars == null) return;
     replay.tick(deltaSeconds);
-    _poses = replay.currentPoses;
-    // From the orbit camera, grow cars with distance so they stay readable;
-    // the chase and TV cameras are close enough for real size.
-    final scale = _cameraMode == CameraMode.orbit
-        ? (orbit.distance / 300).clamp(1.0, 10.0)
-        : 1.0;
+    final poses = replay.currentPoses;
+    cameras.poses = poses;
     cars
-      ..update(_poses, scale: scale)
-      ..highlighted = _cameraMode == CameraMode.orbit ? _followed : null;
-  }
-
-  /// Points the orbit camera at the whole circuit, fitting its bounding
-  /// sphere inside the narrower of the two fields of view.
-  void frameCircuit() {
-    final circuit = _circuit;
-    if (circuit == null) return;
-    _framed = true;
-    final bounds = circuit.bounds;
-    final radius = (bounds.max - bounds.min).length / 2;
-    final viewport = orbit.viewportSize;
-    final aspect = viewport.height > 0 ? viewport.width / viewport.height : 1.0;
-    final halfFovY = _fovY / 2;
-    final halfFovX = math.atan(math.tan(halfFovY) * aspect);
-    final distance = radius / math.sin(math.min(halfFovX, halfFovY));
-    orbit.frame(bounds.center, distance * 1.05);
-  }
-
-  /// Frames the circuit and eases back to the default viewing angle.
-  void resetView() {
-    frameCircuit();
-    orbit.setAngles(azimuth: _defaultAzimuth, polar: _defaultPolar);
+      ..update(poses, scale: cameras.carScale)
+      // Outline the followed car from afar, where it is hard to pick out.
+      ..highlighted = cameras.mode == CameraMode.orbit
+          ? cameras.followedDriver
+          : null;
   }
 
   /// The diorama base: a dark block whose top sits [_plinth] below the
@@ -609,18 +344,7 @@ class TrackScene implements CameraInput {
       localTransform: vm.Matrix4.translation(
         vm.Vector3(center.x, topY - _slabThickness / 2, center.z),
       ),
-      mesh: Mesh(CuboidGeometry(extent), _slabMaterial),
+      mesh: Mesh(CuboidGeometry(extent), _materials.slab),
     );
   }
-
-  static MeshGeometry _geometry(
-    MeshArrays arrays, {
-    GeometryStorage storage = GeometryStorage.fixed,
-  }) => MeshGeometry.fromArrays(
-    positions: arrays.positions,
-    normals: arrays.normals,
-    colors: arrays.colors,
-    indices: arrays.indices,
-    storage: storage,
-  );
 }

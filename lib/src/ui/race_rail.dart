@@ -6,8 +6,9 @@ import '../race/timing_board.dart';
 import '../race/venues.dart';
 import 'hud_style.dart';
 
-/// The docked left rail: which race, the running order, and the followed
-/// driver. The map gets everything else.
+/// The docked rail (beside the map, or under it on a phone): which race,
+/// the running order, and the followed driver. The map gets everything
+/// else.
 class RaceRail extends StatelessWidget {
   const RaceRail({
     super.key,
@@ -113,7 +114,7 @@ class _RacePicker extends StatelessWidget {
               mainAxisSize: MainAxisSize.min,
               children: [
                 Text(
-                  season == null ? '—' : '$season',
+                  season == null ? Hud.unknown : '$season',
                   style: Hud.figures(12, color: Hud.muted),
                 ),
                 const Icon(Icons.arrow_drop_down, size: 16, color: Hud.muted),
@@ -244,8 +245,13 @@ class _TowerState extends State<_Tower> {
           padding: const EdgeInsets.fromLTRB(16, 12, 16, 6),
           child: Row(
             children: [
-              const SizedBox(width: 26, child: Text('POS', style: Hud.label)),
-              const SizedBox(width: 18),
+              const SizedBox(
+                width: _Column.position,
+                child: Text('POS', style: Hud.label),
+              ),
+              const SizedBox(
+                width: _Column.barBefore + _Column.bar + _Column.barAfter,
+              ),
               const Expanded(child: Text('DRIVER', style: Hud.label)),
               GestureDetector(
                 onTap: () => setState(() => _showGap = !_showGap),
@@ -254,8 +260,11 @@ class _TowerState extends State<_Tower> {
                   child: Text(_showGap ? 'GAP' : 'INT', style: Hud.label),
                 ),
               ),
-              const SizedBox(width: 12),
-              const SizedBox(width: 40, child: Text('TYRE', style: Hud.label)),
+              const SizedBox(width: _Column.gap),
+              const SizedBox(
+                width: _Column.compound + _Column.tyreAge,
+                child: Text('TYRE', style: Hud.label),
+              ),
             ],
           ),
         ),
@@ -286,6 +295,19 @@ class _TowerState extends State<_Tower> {
   }
 }
 
+/// Column widths shared by the tower's heading and its rows, so they line
+/// up.
+abstract final class _Column {
+  static const double position = 26;
+
+  /// The team colour bar, and the space either side of it.
+  static const double barBefore = 10, bar = 3, barAfter = 9;
+
+  /// Between the timing and the tyre.
+  static const double gap = 12;
+  static const double compound = 14, tyreAge = 26;
+}
+
 class _TowerRow extends StatelessWidget {
   const _TowerRow({
     required this.row,
@@ -309,7 +331,7 @@ class _TowerRow extends StatelessWidget {
     } else if (row.inPit) {
       timing = 'PIT';
     } else if (row.position == 1) {
-      timing = showGap ? '—' : 'LEADER';
+      timing = showGap ? Hud.unknown : 'LEADER';
     } else {
       timing = (showGap ? row.gap : row.interval)?.shortLabel ?? '';
     }
@@ -325,20 +347,20 @@ class _TowerRow extends StatelessWidget {
           child: Row(
             children: [
               SizedBox(
-                width: 26,
+                width: _Column.position,
                 child: Text(
                   row.retired ? '' : '${row.position}',
                   textAlign: TextAlign.right,
                   style: Hud.figures(12.5, color: Hud.muted),
                 ),
               ),
-              const SizedBox(width: 10),
+              const SizedBox(width: _Column.barBefore),
               Container(
-                width: 3,
+                width: _Column.bar,
                 height: 15,
-                color: Color(0xFF000000 | driver.teamColour),
+                color: Hud.rgb(driver.teamColour),
               ),
-              const SizedBox(width: 9),
+              const SizedBox(width: _Column.barAfter),
               Expanded(
                 child: Text(
                   driver.acronym,
@@ -360,9 +382,9 @@ class _TowerRow extends StatelessWidget {
                       : dim,
                 ),
               ),
-              const SizedBox(width: 12),
+              const SizedBox(width: _Column.gap),
               SizedBox(
-                width: 14,
+                width: _Column.compound,
                 child: Text(
                   row.retired || row.compound == null
                       ? ''
@@ -375,7 +397,7 @@ class _TowerRow extends StatelessWidget {
                 ),
               ),
               SizedBox(
-                width: 26,
+                width: _Column.tyreAge,
                 child: Text(
                   row.retired || row.tyreAge == null ? '' : '${row.tyreAge}',
                   style: Hud.figures(12, color: Hud.muted),
@@ -417,17 +439,11 @@ class _DriverCard extends StatelessWidget {
         final timing = replay.timing.driverAt(driver, replay.time.value);
         final speed = replay.currentPoses[driver]?.speed;
         final ahead = row == null || row.position == 1
-            ? '—'
-            : row.interval?.shortLabel ?? '—';
-        final behindGap = behind?.interval;
-        final String behindText;
-        if (behindGap == null || behind!.retired) {
-          behindText = '—';
-        } else if (behindGap.laps != null) {
-          behindText = '−${behindGap.laps}L';
-        } else {
-          behindText = '−${behindGap.seconds!.toStringAsFixed(1)}';
-        }
+            ? Hud.unknown
+            : row.interval?.shortLabel ?? Hud.unknown;
+        final behindText = behind == null || behind.retired
+            ? Hud.unknown
+            : behind.interval?.shortLabelBehind ?? Hud.unknown;
         final compound = row?.compound;
         return Padding(
           padding: EdgeInsets.fromLTRB(16, 14, 16, compact ? 12 : 16),
@@ -441,7 +457,7 @@ class _DriverCard extends StatelessWidget {
                     width: 3,
                     height: 34,
                     margin: const EdgeInsets.only(top: 2),
-                    color: Color(0xFF000000 | info.teamColour),
+                    color: Hud.rgb(info.teamColour),
                   ),
                   const SizedBox(width: 10),
                   Expanded(
@@ -482,7 +498,7 @@ class _DriverCard extends StatelessWidget {
                 ('BEHIND', behindText),
                 (
                   'SPEED',
-                  speed == null ? '—' : '${(speed * 3.6).round()} km/h',
+                  speed == null ? Hud.unknown : '${(speed * 3.6).round()} km/h',
                 ),
               ]),
               if (!compact) ...[
@@ -493,7 +509,7 @@ class _DriverCard extends StatelessWidget {
                   (
                     'TYRE',
                     compound == null
-                        ? '—'
+                        ? Hud.unknown
                         : '${compound.substring(0, 1)} · ${row!.tyreAge ?? 0}L',
                   ),
                 ]),

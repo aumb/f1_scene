@@ -1,6 +1,6 @@
 import 'package:flutter/material.dart';
 
-import '../scene/track_scene.dart';
+import '../scene/camera_rig.dart';
 import 'hud_style.dart';
 
 /// The camera choice and the view toggles, top right over the map.

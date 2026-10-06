@@ -4,7 +4,7 @@ import 'package:flutter/gestures.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 
-import '../scene/map_camera.dart';
+import '../scene/camera_rig.dart';
 
 /// Turns pointer, trackpad and touch input into camera intents, map style:
 ///
@@ -133,19 +133,16 @@ class _SceneGesturesState extends State<SceneGestures> {
     return LayoutBuilder(
       builder: (context, constraints) {
         _input.viewportSize = constraints.biggest;
-        return Focus(
-          autofocus: true,
-          child: Listener(
-            behavior: HitTestBehavior.opaque,
-            onPointerDown: _down,
-            onPointerMove: _move,
-            onPointerUp: _up,
-            onPointerCancel: _up,
-            onPointerSignal: _signal,
-            onPointerPanZoomStart: _panZoomStart,
-            onPointerPanZoomUpdate: _panZoomUpdate,
-            child: widget.child,
-          ),
+        return Listener(
+          behavior: HitTestBehavior.opaque,
+          onPointerDown: _down,
+          onPointerMove: _move,
+          onPointerUp: _up,
+          onPointerCancel: _up,
+          onPointerSignal: _signal,
+          onPointerPanZoomStart: _panZoomStart,
+          onPointerPanZoomUpdate: _panZoomUpdate,
+          child: widget.child,
         );
       },
     );

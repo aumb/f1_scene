@@ -14,6 +14,12 @@ abstract final class Hud {
   static const muted = Color(0xFF80858E);
   static const faint = Color(0xFF4E525A);
 
+  /// Opaque [Color] from an sRGB `0xRRGGBB` value, such as a team colour.
+  static Color rgb(int rgb) => Color(0xFF000000 | rgb);
+
+  /// Shown for a value that isn't known (yet).
+  static const unknown = '—';
+
   /// Small spaced capitals over a column or a value.
   static const label = TextStyle(
     fontSize: 10.5,
@@ -45,9 +51,9 @@ abstract final class Hud {
     _ => muted,
   };
 
-  /// `1:15.305`, or a dash when unknown.
+  /// `1:15.305`, or [unknown].
   static String lapTime(double? seconds) {
-    if (seconds == null || seconds.isInfinite) return '–';
+    if (seconds == null || seconds.isInfinite) return unknown;
     final m = seconds ~/ 60;
     final s = seconds - m * 60;
     return '$m:${s.toStringAsFixed(3).padLeft(6, '0')}';

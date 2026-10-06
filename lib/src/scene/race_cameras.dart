@@ -1,5 +1,5 @@
 import 'dart:math' as math;
-import 'dart:ui' show Offset;
+import 'dart:ui' show Offset, Size;
 
 import 'package:flutter_scene/scene.dart';
 import 'package:vector_math/vector_math.dart';
@@ -9,19 +9,27 @@ import '../geometry/track_mesh.dart';
 import '../geometry/track_projector.dart';
 import '../race/car_motion.dart';
 
+/// Radians a drag the height of the view turns a car camera.
+double _dragTurn(Size viewport, double pixels) =>
+    pixels * math.pi / math.max(1.0, viewport.height);
+
 /// Third-person camera behind a car, turning with it.
 ///
 /// Unlike [FollowCameraController], whose orbit is fixed in world space, the
 /// yaw eases toward the car's heading, so the view stays behind the car
-/// through corners. Drag orbits around the car, scroll dollies.
+/// through corners. Dragging orbits around the car; [zoomBy] dollies.
 class ChaseCameraController extends CameraController {
   ChaseCameraController() : super(smoothing: 0.2);
+
+  static const double _defaultDistance = 18, _defaultPitch = 0.24;
+  static const double _minDistance = 6, _maxDistance = 200;
 
   /// The pose to chase, read every frame.
   CarPose? Function()? target;
 
-  double distance = 18;
-  double pitch = 0.24;
+  /// Meters from the car, and radians above it.
+  double distance = _defaultDistance;
+  double pitch = _defaultPitch;
 
   /// Extra yaw from dragging, relative to straight behind the car.
   double yawOffset = 0;
@@ -36,11 +44,15 @@ class ChaseCameraController extends CameraController {
 
   /// Back to straight behind the car at the default distance.
   void resetView() {
-    distance = 18;
-    pitch = 0.24;
+    distance = _defaultDistance;
+    pitch = _defaultPitch;
     yawOffset = 0;
     reset();
   }
+
+  /// Moves closer by [factor] (further below 1).
+  void zoomBy(double factor) =>
+      distance = (distance / factor).clamp(_minDistance, _maxDistance);
 
   @override
   void update(double deltaSeconds) {
@@ -73,19 +85,8 @@ class ChaseCameraController extends CameraController {
 
   @override
   void handleDragUpdate(Offset delta) {
-    final k = math.pi / viewportSize.height;
-    yawOffset -= delta.dx * k;
-    pitch = (pitch + delta.dy * k).clamp(0.02, 1.3);
-  }
-
-  @override
-  void handleScroll(double scrollDelta) {
-    distance = (distance * math.exp(scrollDelta / 600)).clamp(6.0, 200.0);
-  }
-
-  @override
-  void handleScaleUpdate(double scaleFactor, Offset focalDelta) {
-    distance = (distance / scaleFactor).clamp(6.0, 200.0);
+    yawOffset -= _dragTurn(viewportSize, delta.dx);
+    pitch = (pitch + _dragTurn(viewportSize, delta.dy)).clamp(0.02, 1.3);
   }
 }
 
@@ -106,6 +107,13 @@ class OnboardCameraController extends CameraController {
 
   /// Takes up the car's heading on the next frame instead of easing over.
   void reset() => _initialized = false;
+
+  /// Back to looking straight ahead.
+  void resetView() => lookYaw = 0;
+
+  /// Looks [radians] further round, up to straight behind either way.
+  void lookBy(double radians) =>
+      lookYaw = (lookYaw + radians).clamp(-math.pi, math.pi);
 
   @override
   void update(double deltaSeconds) {
@@ -137,12 +145,8 @@ class OnboardCameraController extends CameraController {
   }
 
   @override
-  void handleDragUpdate(Offset delta) {
-    lookYaw = (lookYaw - delta.dx * math.pi / viewportSize.width).clamp(
-      -math.pi,
-      math.pi,
-    );
-  }
+  void handleDragUpdate(Offset delta) =>
+      lookBy(-_dragTurn(viewportSize, delta.dx));
 }
 
 /// A trackside camera position and which stretches of track it sees.
@@ -167,7 +171,7 @@ class TvPost {
 /// one the car is approaching and zooming to keep it framed.
 class TvCameraController extends CameraController {
   TvCameraController({
-    required this.posts,
+    required this._posts,
     required this.track,
     required this.projection,
   }) : super(smoothing: 0.15);
@@ -175,7 +179,13 @@ class TvCameraController extends CameraController {
   /// Trackside camera posts, from [TvCameraController.placePosts]. Replace
   /// them when the scenery arrives or goes, so none sits inside it or
   /// films a wall.
-  List<TvPost> posts;
+  List<TvPost> get posts => _posts;
+  List<TvPost> _posts;
+  set posts(List<TvPost> posts) {
+    if (identical(posts, _posts)) return;
+    _posts = posts;
+    reset();
+  }
 
   /// The circuit, to tell which stretch the car is on.
   final TrackProjector track;
@@ -188,6 +198,16 @@ class TvCameraController extends CameraController {
 
   /// Width of the shot around the car, in meters.
   static const double _frameWidth = 26;
+
+  /// Posts are judged by their distance to the point this far ahead of the
+  /// car, in meters, so the camera it is heading toward wins.
+  static const double _lookAhead = 70;
+
+  /// A post is cut to when it is this much closer than the active one...
+  static const double _cutAdvantage = 0.7;
+
+  /// ...or the active one is this far from the car, in meters.
+  static const double _maxRange = 420;
 
   /// Stations per visibility bucket.
   static const int bucketStations = 4;
@@ -217,7 +237,7 @@ class TvCameraController extends CameraController {
     // loses sight, so shots hold rather than flicker between posts.
     final ahead =
         pose.position +
-        Vector3(math.sin(pose.heading), 0, math.cos(pose.heading)) * 70;
+        Vector3(math.sin(pose.heading), 0, math.cos(pose.heading)) * _lookAhead;
     double distance(int i) => posts[i].position.distanceTo(ahead);
     int? best;
     for (var i = 0; i < posts.length; i++) {
@@ -226,11 +246,14 @@ class TvCameraController extends CameraController {
     }
     final active = _active;
     best ??= active ?? 0;
+    // Only to a different post: cutting to the same one would snap the
+    // view every frame.
     final cut =
         active == null ||
-        (!posts[active].sees(along) && posts[best].sees(along)) ||
-        distance(best) < 0.7 * distance(active) ||
-        posts[active].position.distanceTo(pose.position) > 420;
+        best != active &&
+            (!posts[active].sees(along) && posts[best].sees(along) ||
+                distance(best) < _cutAdvantage * distance(active) ||
+                posts[active].position.distanceTo(pose.position) > _maxRange);
     final look = pose.position + Vector3(0, 0.6, 0);
     if (cut) {
       _active = best;
@@ -347,7 +370,7 @@ class TvCameraController extends CameraController {
 
   /// Setback beyond the edge and height above the track, in meters, in the
   /// order tried: a low post close in frames best, so go further and higher
-  /// only as buildings demand (a camera on a crane or a rooftop).
+  /// only as buildings demand (a camera on a crane or a tower beside them).
   static const _candidates = [
     (28.0, 9.0),
     (20.0, 14.0),

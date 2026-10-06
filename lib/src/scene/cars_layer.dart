@@ -10,6 +10,7 @@ import '../race/liveries.dart';
 import '../race/race_models.dart';
 import '../race/traffic.dart';
 import '../geometry/mesh_arrays.dart';
+import 'mesh_upload.dart';
 
 /// One car model per driver, posed from replay poses every frame.
 ///
@@ -36,7 +37,7 @@ class CarsLayer {
       _cars[driver.number] = node;
       root.add(node);
       // The number is drawn as an image; add it once that is ready.
-      numberTexture(driver.number, livery.number).then(
+      _numberTexture(driver.number, livery.number).then(
         (texture) {
           node.add(
             Node(
@@ -60,9 +61,6 @@ class CarsLayer {
 
   final root = Node(name: 'cars');
   final _cars = <int, Node>{};
-
-  /// The scene node of [driver]'s car, for cameras to follow.
-  Node? nodeOf(int driver) => _cars[driver];
 
   /// Outlines [driver]'s car, or none.
   set highlighted(int? driver) {
@@ -97,7 +95,7 @@ class CarsLayer {
 
 /// The car number as an image: [fill] figures with a contrasting outline on
 /// a transparent background, sized for the number plates.
-Future<Texture2D> numberTexture(int number, int fill) async {
+Future<Texture2D> _numberTexture(int number, int fill) async {
   const width = 256, height = 160;
   final light = isLight(fill);
   TextPainter figures(Paint paint) => TextPainter(
@@ -139,10 +137,10 @@ Future<Texture2D> numberTexture(int number, int fill) async {
 class _SharedCar {
   _SharedCar._() {
     _meshes = CarMeshes.build();
-    carbon = _upload(_meshes.carbon);
-    tyres = _upload(_meshes.tyres);
-    accent = _upload(_meshes.accent);
-    numberPlates = _upload(_meshes.numberPlates);
+    carbon = uploadMesh(_meshes.carbon);
+    tyres = uploadMesh(_meshes.tyres);
+    accent = uploadMesh(_meshes.accent);
+    numberPlates = uploadMesh(_meshes.numberPlates);
   }
 
   static final instance = _SharedCar._();
@@ -154,16 +152,8 @@ class _SharedCar {
   late final MeshGeometry numberPlates;
   final _bodies = <Livery, MeshGeometry>{};
 
-  static MeshGeometry _upload(MeshArrays arrays) => MeshGeometry.fromArrays(
-    positions: arrays.positions,
-    normals: arrays.normals,
-    colors: arrays.colors,
-    texCoords: arrays.texCoords,
-    indices: arrays.indices,
-  );
-
   /// The painted bodywork in [livery], built once per team.
-  MeshGeometry bodyFor(Livery livery) => _bodies[livery] ??= _upload(
+  MeshGeometry bodyFor(Livery livery) => _bodies[livery] ??= uploadMesh(
     _meshes.paint((
       upper: linearColor(livery.upper),
       lower: linearColor(livery.lower),

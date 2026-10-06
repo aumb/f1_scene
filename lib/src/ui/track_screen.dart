@@ -9,8 +9,9 @@ import '../race/race_models.dart';
 import '../race/race_replay.dart';
 import '../race/race_repository.dart';
 import '../race/venues.dart';
-import '../scene/adaptive_resolution.dart';
+import '../scene/camera_rig.dart';
 import '../scene/track_scene.dart';
+import 'frame_pacer.dart';
 import 'frame_stats.dart';
 import 'hud_style.dart';
 import 'map_controls.dart';
@@ -18,7 +19,8 @@ import 'playback_bar.dart';
 import 'race_rail.dart';
 import 'scene_gestures.dart';
 
-/// Full-screen race replay on a circuit diorama, with a heads-up overlay.
+/// Full-screen race replay: the race rail beside the circuit diorama (under
+/// it on a phone), with map controls and a playback bar.
 class TrackScreen extends StatefulWidget {
   const TrackScreen({super.key});
 
@@ -44,21 +46,8 @@ class _TrackScreenState extends State<TrackScreen> {
   RaceSession? _race;
   Circuit? _circuit;
   RaceReplay? _replay;
-  CameraMode _cameraMode = CameraMode.orbit;
   bool _sceneReady = false;
-
-  /// Frame timing readout, on with `?stats` in the URL or the F key.
-  final _frameStats = FrameStats();
-  bool _showStats = Uri.base.queryParameters.containsKey('stats');
-  final _tickWatch = Stopwatch();
-
-  /// Render resolution, adapted to what the GPU sustains unless `?scale=`
-  /// in the URL fixes it.
-  final _resolution = AdaptiveResolution();
-  final double? _fixedScale = double.tryParse(
-    Uri.base.queryParameters['scale'] ?? '',
-  );
-  bool _resolutionStarted = false;
+  final _pacer = FramePacer();
   bool _loadingRace = false;
   String? _raceError;
   Object? _fatalError;
@@ -94,9 +83,9 @@ class _TrackScreenState extends State<TrackScreen> {
       );
       if (!mounted) return;
       // Populate the scene before SceneView mounts so its warm-up compiles
-      // every pipeline up front. CameraControls is not laid out yet, so seed
+      // every pipeline up front. SceneGestures is not laid out yet, so seed
       // the viewport size used for framing; it keeps it current from here.
-      _trackScene.orbit.viewportSize = MediaQuery.sizeOf(context);
+      _trackScene.cameras.viewportSize = MediaQuery.sizeOf(context);
       _trackScene.showCircuit(circuit);
       _loadEnvironment(circuit);
       setState(() {
@@ -135,6 +124,7 @@ class _TrackScreenState extends State<TrackScreen> {
       _circuits.load(_circuitIndex.firstWhere((c) => c.id == id));
 
   Future<void> _selectSeason(int season) async {
+    final (previousSeason, previousRaces) = (_season, _seasonRaces);
     setState(() {
       _season = season;
       _seasonRaces = const [];
@@ -148,8 +138,15 @@ class _TrackScreenState extends State<TrackScreen> {
           .firstOrNull;
       if (first != null) await _selectRace(first);
     } catch (e) {
-      if (!mounted) return;
-      setState(() => _raceError = "Couldn't load the $season season.");
+      if (!mounted || _season != season) return;
+      // Back to the season on screen, so this one can be picked again.
+      setState(() {
+        _season = previousSeason;
+        _seasonRaces = previousRaces;
+      });
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text("Couldn't load the $season season.")),
+      );
     }
   }
 
@@ -157,14 +154,12 @@ class _TrackScreenState extends State<TrackScreen> {
     final selection = ++_selection;
     bool stale() => !mounted || selection != _selection;
 
-    // Detach the old replay from the scene and the overlay before disposing
-    // it, so nothing ticks or listens to it afterwards.
+    // Detach the old replay from the scene, the rail and the playback bar
+    // before disposing it, so nothing ticks or listens to it afterwards.
     final previous = _replay;
-    _trackScene
-      ..showRace(null)
-      ..cameraMode = CameraMode.orbit;
+    _trackScene.showRace(null);
     setState(() {
-      _cameraMode = CameraMode.orbit;
+      _trackScene.cameras.mode = CameraMode.orbit;
       _race = race;
       _replay = null;
       _loadingRace = true;
@@ -244,101 +239,63 @@ class _TrackScreenState extends State<TrackScreen> {
   }
 
   void _onTick(Duration elapsed, double dt) {
-    _tickWatch
-      ..reset()
-      ..start();
-    _trackScene.tick(dt);
-    _tickWatch.stop();
-    _frameStats.record(dt, _tickWatch.elapsedMicroseconds / 1e6);
-    _adaptResolution(dt);
+    final size = _trackScene.cameras.orbit.viewportSize;
+    final ratio = View.of(context).devicePixelRatio;
+    _pacer.tick(
+      _trackScene.scene,
+      dt,
+      work: _trackScene.tick,
+      pixels: size.width * size.height * ratio * ratio,
+    );
   }
 
-  void _adaptResolution(double dt) {
-    final scene = _trackScene.scene;
-    final fixed = _fixedScale;
-    if (fixed != null) {
-      scene.renderScale = fixed.clamp(0.25, 1.0);
-    } else if (!_resolutionStarted) {
-      // Start within a pixel budget for this viewport, then adapt.
-      final size = _trackScene.orbit.viewportSize;
-      if (size.width <= 1) return;
-      final ratio = View.of(context).devicePixelRatio;
-      _resolution.start(size.width * size.height * ratio * ratio);
-      scene.renderScale = _resolution.scale;
-      _resolutionStarted = true;
-      if (_showStats) debugPrint('Render scale ${_resolution.scale} to start');
-    } else if (_resolution.record(dt)) {
-      scene.renderScale = _resolution.scale;
-      if (_showStats) debugPrint('Render scale ${_resolution.scale}');
-    }
-    _frameStats.renderScale = scene.renderScale;
-  }
-
-  void _setCameraMode(CameraMode mode) {
-    _trackScene.cameraMode = mode;
-    setState(() => _cameraMode = mode);
-  }
-
-  void _follow(int driver) {
-    _trackScene.followedDriver = driver;
-    setState(() {});
-  }
-
-  void _resetView() {
-    switch (_cameraMode) {
-      case CameraMode.orbit:
-        _trackScene.resetView();
-      case CameraMode.chase:
-        _trackScene.chase.resetView();
-      case CameraMode.onboard:
-        _trackScene.onboard.lookYaw = 0;
-      case CameraMode.tv:
-        _setCameraMode(CameraMode.orbit);
-        _trackScene.resetView();
-    }
-  }
+  CameraRig get _cameras => _trackScene.cameras;
 
   @override
   Widget build(BuildContext context) {
     return CallbackShortcuts(
       bindings: {
         const SingleActivator(LogicalKeyboardKey.keyF): () =>
-            setState(() => _showStats = !_showStats),
+            setState(() => _pacer.showStats = !_pacer.showStats),
       },
-      child: Scaffold(
-        backgroundColor: Hud.background,
-        body: SafeArea(
-          child: Padding(
-            padding: const EdgeInsets.all(12),
-            child: DecoratedBox(
-              decoration: BoxDecoration(
-                borderRadius: BorderRadius.circular(12),
-                border: Border.all(color: Hud.line),
-              ),
-              child: ClipRRect(
-                borderRadius: BorderRadius.circular(11),
-                child: LayoutBuilder(
-                  builder: (context, constraints) {
-                    // Docked rail beside the map; under it on a phone.
-                    if (constraints.maxWidth >= 760) {
-                      return Row(
+      // Focused from the start, so the shortcut works before any click.
+      child: Focus(
+        autofocus: true,
+        child: Scaffold(
+          backgroundColor: Hud.background,
+          body: SafeArea(
+            child: Padding(
+              padding: const EdgeInsets.all(12),
+              child: DecoratedBox(
+                decoration: BoxDecoration(
+                  borderRadius: BorderRadius.circular(12),
+                  border: Border.all(color: Hud.line),
+                ),
+                child: ClipRRect(
+                  borderRadius: BorderRadius.circular(11),
+                  child: LayoutBuilder(
+                    builder: (context, constraints) {
+                      // Docked rail beside the map; under it on a phone.
+                      if (constraints.maxWidth >= 760) {
+                        return Row(
+                          crossAxisAlignment: CrossAxisAlignment.stretch,
+                          children: [
+                            SizedBox(width: 290, child: _rail()),
+                            const VerticalDivider(width: 1, color: Hud.line),
+                            Expanded(child: _map()),
+                          ],
+                        );
+                      }
+                      return Column(
                         crossAxisAlignment: CrossAxisAlignment.stretch,
                         children: [
-                          SizedBox(width: 290, child: _rail()),
-                          const VerticalDivider(width: 1, color: Hud.line),
-                          Expanded(child: _map()),
+                          Expanded(flex: 5, child: _map()),
+                          const Divider(height: 1, color: Hud.line),
+                          Expanded(flex: 4, child: _rail(compact: true)),
                         ],
                       );
-                    }
-                    return Column(
-                      crossAxisAlignment: CrossAxisAlignment.stretch,
-                      children: [
-                        Expanded(flex: 5, child: _map()),
-                        const Divider(height: 1, color: Hud.line),
-                        Expanded(flex: 4, child: _rail(compact: true)),
-                      ],
-                    );
-                  },
+                    },
+                  ),
                 ),
               ),
             ),
@@ -356,8 +313,8 @@ class _TrackScreenState extends State<TrackScreen> {
     onSeason: _selectSeason,
     onRace: _selectRace,
     replay: _replay,
-    followed: _trackScene.followedDriver,
-    onFollow: _follow,
+    followed: _sceneReady ? _cameras.followedDriver : null,
+    onFollow: (driver) => setState(() => _cameras.followedDriver = driver),
     loading: _loadingRace,
     error: _raceError,
     onRetry: _retry,
@@ -387,8 +344,8 @@ class _TrackScreenState extends State<TrackScreen> {
                 children: [
                   if (_sceneReady)
                     SceneGestures(
-                      input: _trackScene,
-                      enabled: _cameraMode != CameraMode.tv,
+                      input: _cameras,
+                      enabled: _cameras.mode != CameraMode.tv,
                       child: SceneView(
                         _trackScene.scene,
                         warmUp: true,
@@ -411,23 +368,23 @@ class _TrackScreenState extends State<TrackScreen> {
                     child: Align(
                       alignment: Alignment.topRight,
                       child: MapControls(
-                        mode: _cameraMode,
+                        mode: _sceneReady ? _cameras.mode : CameraMode.orbit,
                         hasRace: _replay != null,
-                        onMode: _setCameraMode,
+                        onMode: (mode) => setState(() => _cameras.mode = mode),
                         scenery: _trackScene.sceneryVisible,
                         onScenery: () => setState(
                           () => _trackScene.sceneryVisible =
                               !_trackScene.sceneryVisible,
                         ),
-                        onRecenter: _resetView,
+                        onRecenter: () => setState(_cameras.resetView),
                       ),
                     ),
                   ),
-                  if (_showStats)
+                  if (_pacer.showStats)
                     Positioned(
                       top: 14,
                       left: 14,
-                      child: FrameStatsView(stats: _frameStats),
+                      child: FrameStatsView(stats: _pacer.stats),
                     ),
                   const Positioned(
                     left: 16,

@@ -1,5 +1,5 @@
 import 'dart:math' as math;
-import 'dart:ui' show Offset, Size;
+import 'dart:ui' show Offset;
 
 import 'package:flutter_scene/scene.dart';
 import 'package:vector_math/vector_math.dart';
@@ -27,10 +27,10 @@ class MapCameraController extends CameraController {
        _polar = polar,
        _polarGoal = polar;
 
-  double minDistance;
-  double maxDistance;
-  double minPolar;
-  double maxPolar;
+  final double minDistance;
+  final double maxDistance;
+  final double minPolar;
+  final double maxPolar;
 
   /// Supplies the camera to cast pointer rays from; set once mounted.
   Camera Function()? camera;
@@ -44,14 +44,11 @@ class MapCameraController extends CameraController {
   double _polar;
   double _polarGoal;
 
-  /// Current (eased) values.
-  Vector3 get target => _target.clone();
-
   /// Where the target is easing to.
   Vector3 get targetGoal => _targetGoal.clone();
+
+  /// The distance from the target now, as eased.
   double get distance => _distance;
-  double get azimuth => _azimuth;
-  double get polar => _polar;
 
   /// Eases to look at [center] from [distance] away.
   void frame(Vector3 center, double distance) {
@@ -64,6 +61,14 @@ class MapCameraController extends CameraController {
     final turn = (azimuth - _azimuthGoal + math.pi) % (2 * math.pi) - math.pi;
     _azimuthGoal += turn;
     _polarGoal = polar.clamp(minPolar, maxPolar);
+  }
+
+  /// A drag orbits: a drag the height of the view turns half a circle.
+  @override
+  void handleDragUpdate(Offset delta) {
+    final k = math.pi / math.max(1.0, viewportSize.height);
+    // Drag down to look from higher up, as in map apps.
+    orbitBy(-delta.dx * k, delta.dy * k);
   }
 
   /// Rotates around the target: [deltaAzimuth] about world up, [deltaPolar]
@@ -129,21 +134,4 @@ class MapCameraController extends CameraController {
         Vector3(0, math.sin(_polar) * _distance, 0);
     node.lookAtFrom(eye, _target);
   }
-}
-
-/// What the gesture layer can ask of whichever camera is active.
-abstract interface class CameraInput {
-  set viewportSize(Size size);
-
-  /// A rotate drag of [delta] logical pixels.
-  void orbitDrag(Offset delta);
-
-  /// Rotation about the vertical axis, radians (trackpad two-finger twist).
-  void rotate(double radians);
-
-  /// A pan from [from] to [to] (logical pixels): drag the view along.
-  void panDrag(Offset from, Offset to);
-
-  /// Zoom by [factor] (above 1 is closer) around [focal].
-  void zoomAt(double factor, Offset focal);
 }

@@ -28,7 +28,7 @@ class PlaybackBar extends StatelessWidget {
               speed: 1,
               lap: 0,
               lapCount: 0,
-              clock: '–',
+              clock: Hud.unknown,
               time: 0,
               start: 0,
               end: 1,
