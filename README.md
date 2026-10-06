@@ -13,8 +13,8 @@ exploring it. Runs on the web, macOS, iOS and Android.
 | 1 | Circuit dioramas: real width and elevation, sectors, orbit camera | done |
 | 2 | Races from [OpenF1](https://openf1.org), cars moving on a scrubbable timeline | done |
 | 3 | Cars riding the track, pit lane, car model, chase and TV cameras | done |
-| 4 | HUD: timing tower, sectors, DRS zones, kerbs | next |
-| 5 | Terrain, buildings, GitHub Pages build | |
+| 4 | Timing tower, driver card with sectors, DRS zones, kerbs | done |
+| 5 | Terrain, buildings, GitHub Pages build | next |
 
 31 circuits are included, covering every venue on the 2023–2025 calendars.
 Of 2026's new or returning venues, Madrid and Sepang are not selectable yet:
@@ -68,6 +68,13 @@ tool/         Data vendoring and alignment check scripts
   follow corners instead of cutting the chords between samples ~20 m apart,
   keep a steady speed, and stay inside the track edges despite alignment
   error. The pit lane is traced from one typical pit stop's positions.
+- **Timing.** The tower and driver card replay OpenF1's positions, intervals,
+  stints and lap/sector times at the playhead; sectors are rated purple
+  (fastest of anyone), green (personal best) or yellow against the bests set
+  so far.
+- **Track details.** Kerbs follow curvature (inside every corner, outside
+  the exit of tight ones). DRS zones are derived from where cars had DRS open
+  over a few mid-race minutes (none in 2026, which replaced DRS).
 - **Cars and cameras.** The car is a low-poly 2026-proportioned model built
   in code (body in the team colour). Besides the orbit view, a chase camera
   turns with the followed car, and a TV mode cuts between trackside posts on

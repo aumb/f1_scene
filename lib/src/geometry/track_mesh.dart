@@ -266,6 +266,40 @@ Float32List uniformRibbonColors(TrackStations stations, Vector4 color) {
   return colors;
 }
 
+/// Collects flat coloured quads, each with its own vertices so colours stay
+/// crisp. Corners come left, right, next-left, next-right (relative to the
+/// direction of travel), which winds them to face up.
+class _Quads {
+  final _positions = <double>[];
+  final _normals = <double>[];
+  final _colors = <double>[];
+  final _indices = <int>[];
+
+  void add(
+    Vector3 left,
+    Vector3 right,
+    Vector3 nextLeft,
+    Vector3 nextRight,
+    Vector3 normal,
+    Vector4 color,
+  ) {
+    final v = _positions.length ~/ 3;
+    for (final p in [left, right, nextLeft, nextRight]) {
+      _positions.addAll([p.x, p.y, p.z]);
+      _normals.addAll([normal.x, normal.y, normal.z]);
+      _colors.addAll([color.x, color.y, color.z, color.w]);
+    }
+    _indices.addAll([v, v + 1, v + 2, v + 1, v + 3, v + 2]);
+  }
+
+  MeshArrays build() => MeshArrays(
+    positions: Float32List.fromList(_positions),
+    normals: Float32List.fromList(_normals),
+    colors: Float32List.fromList(_colors),
+    indices: Uint32List.fromList(_indices),
+  );
+}
+
 void _put3(Float32List list, int vertex, Vector3 v) {
   list[vertex * 3] = v.x;
   list[vertex * 3 + 1] = v.y;
@@ -310,9 +344,156 @@ class TrackMeshBuilder {
 
   /// A checkered start/finish strip across the track, [length] meters long,
   /// lying on the surface.
-  MeshArrays startFinishLine({double length = 4.0, int columns = 8}) {
-    const rows = 2;
-    final s = circuit.startFinishS;
+  MeshArrays startFinishLine({double length = 4.0, int columns = 8}) =>
+      _crossLine(
+        circuit.startFinishS,
+        length: length,
+        rows: 2,
+        columns: columns,
+        colorAt: (r, c) =>
+            (r + c).isEven ? linearColor(0xF5F5F5) : linearColor(0x111111),
+      );
+
+  /// Thin lines across the track where each sector after the first starts.
+  MeshArrays sectorLines() {
+    final quads = _Quads();
+    for (final sector in circuit.sectors.skip(1)) {
+      _crossLine(
+        circuit.sAtLapDistance(sector.fromDistance),
+        length: 1.0,
+        rows: 1,
+        columns: 1,
+        colorAt: (_, _) => linearColor(0xFFD400),
+        into: quads,
+      );
+    }
+    return quads.build();
+  }
+
+  /// Red and white kerbs, derived from curvature: on the inside of every
+  /// corner tighter than [cornerRadius], and on the outside of the exit of
+  /// corners tighter than [exitRadius]. They lie on the surface along its
+  /// edges, [width] meters wide.
+  MeshArrays kerbs({
+    double width = 1.4,
+    double cornerRadius = 140,
+    double exitRadius = 70,
+  }) {
+    final n = stations.length;
+    final step = circuit.centerline.length / n;
+    int at(int i) => (i % n + n) % n;
+
+    // Signed curvature (positive turns left), smoothed over ~14 m.
+    final raw = [
+      for (var i = 0; i < n; i++)
+        () {
+          final a = stations.left[at(i - 2)], b = stations.left[at(i + 2)];
+          return math.atan2(a.cross(b).y, a.dot(b)) / (4 * step);
+        }(),
+    ];
+    final curvature = [
+      for (var i = 0; i < n; i++)
+        [for (var k = -3; k <= 3; k++) raw[at(i + k)]].reduce((x, y) => x + y) /
+            7,
+    ];
+
+    // Start scanning on a straight so no corner straddles index 0.
+    var origin = 0;
+    while (origin < n && curvature[origin].abs() > 1 / cornerRadius) {
+      origin++;
+    }
+    final quads = _Quads();
+    final red = linearColor(0xD7262E), white = linearColor(0xEDEDED);
+    void kerb(int from, int to, double side) {
+      for (var k = from; k < to; k++) {
+        final i = at(k), j = at(k + 1);
+        Vector3 edge(int s) =>
+            side > 0 ? stations.leftEdge(s) : stations.rightEdge(s);
+        double offset(int s) =>
+            side > 0 ? stations.leftOffset[s] : stations.rightOffset[s];
+        Vector3 inner(int s) =>
+            edge(s) -
+            stations.left[s] * (side * math.min(width, offset(s) * 0.4));
+        final normal = stations.forward[i].cross(stations.left[i])..normalize();
+        final color = k.isEven ? red : white;
+        // Corners ordered left, right, next-left, next-right.
+        if (side > 0) {
+          quads.add(edge(i), inner(i), edge(j), inner(j), normal, color);
+        } else {
+          quads.add(inner(i), edge(i), inner(j), edge(j), normal, color);
+        }
+      }
+    }
+
+    var k = origin;
+    while (k < origin + n) {
+      final c = curvature[at(k)];
+      if (c.abs() <= 1 / cornerRadius) {
+        k++;
+        continue;
+      }
+      final sign = c.sign;
+      var end = k, apex = k;
+      while (end < origin + n &&
+          curvature[at(end)].sign == sign &&
+          curvature[at(end)].abs() > 1 / cornerRadius) {
+        if (curvature[at(end)].abs() > curvature[at(apex)].abs()) apex = end;
+        end++;
+      }
+      if (end - k >= 4) {
+        // Inside of the corner, a little either side of it.
+        kerb(k - 2, end + 2, sign);
+        if (curvature[at(apex)].abs() > 1 / exitRadius) {
+          // Outside of the exit, from the apex out.
+          kerb(apex, end + 8, -sign);
+        }
+      }
+      k = end;
+    }
+    return quads.build();
+  }
+
+  /// Bands down the middle of the track over each span `(start, end)` of
+  /// stations, wrapping past the seam when start > end.
+  MeshArrays drsBands(List<(double, double)> spans, {double fraction = 0.35}) {
+    final n = stations.length;
+    final quads = _Quads();
+    final color = linearColor(0x2BD96A);
+    for (final (start, end) in spans) {
+      final length = (end - start) % n;
+      for (var k = 0; k < length.ceil(); k++) {
+        final i = (start.floor() + k) % n, j = (i + 1) % n;
+        Vector3 side(int s, double sign) =>
+            stations.center[s] +
+            stations.left[s] *
+                (sign *
+                    fraction *
+                    (stations.leftOffset[s] + stations.rightOffset[s]) /
+                    2);
+        final normal = stations.forward[i].cross(stations.left[i])..normalize();
+        quads.add(
+          side(i, 1),
+          side(i, -1),
+          side(j, 1),
+          side(j, -1),
+          normal,
+          color,
+        );
+      }
+    }
+    return quads.build();
+  }
+
+  /// A [rows] x [columns] grid across the track at [s], [length] meters long.
+  MeshArrays _crossLine(
+    double s, {
+    required double length,
+    required int rows,
+    required int columns,
+    required Vector4 Function(int row, int column) colorAt,
+    _Quads? into,
+  }) {
+    final quads = into ?? _Quads();
     final center = circuit.centerline.pointAt(s);
     final forward = circuit.centerline.tangentAt(s);
     final left = Vector3(forward.z, 0, -forward.x)..normalize();
@@ -320,47 +501,23 @@ class TrackMeshBuilder {
     final halfWidth = circuit.widthAt(s) / 2;
     final cellWidth = halfWidth * 2 / columns;
     final cellLength = length / rows;
-
-    final cells = rows * columns;
-    final positions = Float32List(cells * 4 * 3);
-    final normals = Float32List(cells * 4 * 3);
-    final colors = Float32List(cells * 4 * 4);
-    final indices = Uint32List(cells * 6);
-    final white = linearColor(0xF5F5F5), black = linearColor(0x111111);
-
-    var cell = 0;
+    Vector3 corner(double along, double across) =>
+        center + forward * along + left * across;
     for (var r = 0; r < rows; r++) {
       for (var c = 0; c < columns; c++) {
         final along0 = -length / 2 + r * cellLength;
         final across0 = halfWidth - c * cellWidth;
-        Vector3 corner(double along, double across) =>
-            center + forward * along + left * across;
-        final v = cell * 4;
-        _put3(positions, v, corner(along0, across0));
-        _put3(positions, v + 1, corner(along0, across0 - cellWidth));
-        _put3(positions, v + 2, corner(along0 + cellLength, across0));
-        _put3(
-          positions,
-          v + 3,
+        quads.add(
+          corner(along0, across0),
+          corner(along0, across0 - cellWidth),
+          corner(along0 + cellLength, across0),
           corner(along0 + cellLength, across0 - cellWidth),
+          normal,
+          colorAt(r, c),
         );
-        final color = (r + c).isEven ? white : black;
-        for (var k = 0; k < 4; k++) {
-          _put3(normals, v + k, normal);
-          _put4(colors, v + k, color);
-        }
-        // Same corner order as the surface strip: left, right, next-left,
-        // next-right, so the same winding faces up.
-        indices.setAll(cell * 6, [v, v + 1, v + 2, v + 1, v + 3, v + 2]);
-        cell++;
       }
     }
-    return MeshArrays(
-      positions: positions,
-      normals: normals,
-      colors: colors,
-      indices: indices,
-    );
+    return quads.build();
   }
 
   Vector4 _surfaceColor(TrackColorMode mode, int i) {

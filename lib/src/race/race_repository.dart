@@ -97,8 +97,100 @@ class RaceRepository {
               : DateTime.parse(l['date_start'] as String),
           duration: (l['lap_duration'] as num?)?.toDouble(),
           isPitOutLap: l['is_pit_out_lap'] as bool? ?? false,
+          sectors: [
+            for (final k in [
+              'duration_sector_1',
+              'duration_sector_2',
+              'duration_sector_3',
+            ])
+              (l[k] as num?)?.toDouble(),
+          ],
+          segments: [
+            for (final k in [
+              'segments_sector_1',
+              'segments_sector_2',
+              'segments_sector_3',
+            ])
+              for (final code in (l[k] as List?) ?? const [])
+                MiniSector.fromCode(code as int?),
+          ],
         ),
     ];
+  }
+
+  /// Running-order changes: whenever a driver's position changed.
+  Future<List<({int driver, DateTime date, int position})>> positions(
+    int sessionKey,
+  ) async {
+    final rows = await _client.get('position', {'session_key': sessionKey});
+    return [
+      for (final r in rows)
+        (
+          driver: r['driver_number'] as int,
+          date: DateTime.parse(r['date'] as String),
+          position: r['position'] as int,
+        ),
+    ];
+  }
+
+  /// Gap to the leader and to the car ahead, sampled every few seconds.
+  Future<List<({int driver, DateTime date, Gap? gap, Gap? interval})>>
+  intervals(int sessionKey) async {
+    final rows = await _client.get('intervals', {'session_key': sessionKey});
+    return [
+      for (final r in rows)
+        (
+          driver: r['driver_number'] as int,
+          date: DateTime.parse(r['date'] as String),
+          gap: Gap.parse(r['gap_to_leader']),
+          interval: Gap.parse(r['interval']),
+        ),
+    ];
+  }
+
+  Future<List<RaceStint>> stints(int sessionKey) async {
+    final rows = await _client.get('stints', {'session_key': sessionKey});
+    return [
+      for (final r in rows)
+        if (r['lap_start'] != null)
+          RaceStint(
+            driverNumber: r['driver_number'] as int,
+            lapStart: r['lap_start'] as int,
+            lapEnd: r['lap_end'] as int?,
+            compound: r['compound'] as String? ?? 'UNKNOWN',
+            tyreAgeAtStart: r['tyre_age_at_start'] as int? ?? 0,
+          ),
+    ];
+  }
+
+  /// When each car had DRS open within `[from, to)`, as seconds since
+  /// [epoch] per driver. OpenF1 codes an open flap as 10, 12 or 14; seasons
+  /// without DRS (2026) report null and yield nothing.
+  Future<Map<int, List<double>>> drsOpen(
+    int sessionKey, {
+    required DateTime epoch,
+    required DateTime from,
+    required DateTime to,
+  }) async {
+    final rows = await _client.get('car_data', {
+      'session_key': sessionKey,
+      'date>=': _timestamp(from),
+      'date<': _timestamp(to),
+    });
+    final open = <int, List<double>>{};
+    for (final r in rows) {
+      if (const {10, 12, 14}.contains(r['drs'])) {
+        open
+            .putIfAbsent(r['driver_number'] as int, () => [])
+            .add(
+              DateTime.parse(r['date'] as String)
+                      .difference(epoch)
+                      .inMicroseconds /
+                  1e6,
+            );
+      }
+    }
+    return open;
   }
 
   Future<List<RacePitStop>> pitStops(int sessionKey) async {

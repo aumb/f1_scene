@@ -7,10 +7,12 @@ import '../geometry/track_alignment.dart';
 import '../geometry/track_mesh.dart';
 import '../geometry/track_projector.dart';
 import 'car_motion.dart';
+import 'drs_zones.dart';
 import 'location_timeline.dart';
 import 'pit_lane_tracer.dart';
 import 'race_models.dart';
 import 'race_repository.dart';
+import 'timing_board.dart';
 
 /// Plays back one race: owns its data, the alignment from OpenF1's circuit
 /// frame onto the scene, and the playback clock.
@@ -23,6 +25,7 @@ class RaceReplay extends ChangeNotifier {
     required this.alignment,
     required this.pitLane,
     required this.featuredDriver,
+    required this.timing,
     required this._repository,
     required this._motion,
     required this._leaderLapStarts,
@@ -30,6 +33,7 @@ class RaceReplay extends ChangeNotifier {
     required double end,
   }) : timeline = LocationTimeline(start: raceStart - _preRoll, end: end) {
     time.value = raceStart - 15;
+    _updateStandings();
   }
 
   /// Loads everything needed to start playback of [session] on a circuit
@@ -39,10 +43,14 @@ class RaceReplay extends ChangeNotifier {
     required RaceSession session,
     required TrackStations stations,
   }) async {
-    final (drivers, laps, pitStops) = await (
-      repository.drivers(session.sessionKey),
-      repository.laps(session.sessionKey),
-      repository.pitStops(session.sessionKey),
+    final key = session.sessionKey;
+    final (drivers, laps, pitStops, positions, intervals, stints) = await (
+      repository.drivers(key),
+      repository.laps(key),
+      repository.pitStops(key),
+      repository.positions(key),
+      repository.intervals(key),
+      repository.stints(key),
     ).wait;
     if (drivers.isEmpty || laps.isEmpty) {
       throw StateError('OpenF1 has no timing for ${session.meetingName}');
@@ -115,12 +123,20 @@ class RaceReplay extends ChangeNotifier {
               .reduce((a, b) => a.start!.isBefore(b.start!) ? a : b)
               .driverNumber;
 
-    return RaceReplay._(
+    final replay = RaceReplay._(
       session: session,
       drivers: drivers,
       alignment: alignment,
       pitLane: pitLane,
       featuredDriver: featured,
+      timing: TimingBoard(
+        epoch: session.start,
+        drivers: drivers,
+        laps: laps,
+        positions: positions,
+        intervals: intervals,
+        stints: stints,
+      ),
       repository: repository,
       motion: CarMotion(
         alignment: alignment.transform,
@@ -131,6 +147,8 @@ class RaceReplay extends ChangeNotifier {
       raceStart: leaderLapStarts.first,
       end: lastFinish + 60,
     );
+    replay._loadDrsZones(track);
+    return replay;
   }
 
   /// A representative lap: early in the race, not out of the pits, and
@@ -166,6 +184,21 @@ class RaceReplay extends ChangeNotifier {
 
   /// Who to follow by default: the leader after lap 1.
   final int featuredDriver;
+
+  /// What the timing screens said at any moment.
+  final TimingBoard timing;
+
+  /// The running order at the playhead, refreshed a few times a second.
+  final standings = ValueNotifier<List<TowerRow>>(const []);
+
+  /// DRS zones, derived from car data once playback is ready; empty until
+  /// then, and for seasons without DRS.
+  final drsZones = ValueNotifier<List<TrackSpan>>(const []);
+
+  /// Car poses at the playhead, updated every [tick].
+  Map<int, CarPose> get currentPoses => _currentPoses;
+  Map<int, CarPose> _currentPoses = const {};
+  double _sinceStandings = 0;
 
   /// Lights out, in seconds since session start.
   final double raceStart;
@@ -222,10 +255,18 @@ class RaceReplay extends ChangeNotifier {
   void seek(double t) {
     time.value = t.clamp(timeline.start, timeline.end);
     _requestChunks();
+    _updateStandings();
   }
 
-  /// Advances playback by [dt] wall-clock seconds.
+  /// Advances playback by [dt] wall-clock seconds and poses the cars.
   void tick(double dt) {
+    _advance(dt);
+    _currentPoses = poses();
+    _sinceStandings += dt;
+    if (_sinceStandings >= 0.25) _updateStandings();
+  }
+
+  void _advance(double dt) {
     _requestChunks();
     if (!_playing) return;
     if (!timeline.isReady(time.value)) {
@@ -239,6 +280,54 @@ class RaceReplay extends ChangeNotifier {
       pause();
     } else {
       time.value = next;
+    }
+  }
+
+  void _updateStandings() {
+    _sinceStandings = 0;
+    final rows = timing.standingsAt(
+      time.value,
+      inPit: {
+        for (final MapEntry(:key, :value) in _currentPoses.entries)
+          if (value.inPit) key,
+      },
+    );
+    if (!listEquals(rows, standings.value)) standings.value = rows;
+  }
+
+  /// Derives the DRS zones from a few minutes of mid-race car data.
+  Future<void> _loadDrsZones(TrackProjector track) async {
+    // 15 minutes in: DRS is enabled after two laps, and an early safety car
+    // is usually over.
+    final from = session.start.add(
+      Duration(milliseconds: ((raceStart + 900) * 1000).round()),
+    );
+    final to = from.add(const Duration(minutes: 4));
+    try {
+      final (open, locations) = await (
+        _repository.drsOpen(
+          session.sessionKey,
+          epoch: session.start,
+          from: from,
+          to: to,
+        ),
+        _repository.locations(
+          session.sessionKey,
+          epoch: session.start,
+          from: from,
+          to: to,
+        ),
+      ).wait;
+      if (_disposed) return;
+      drsZones.value = drsZonesFrom(
+        openTimes: open,
+        locations: locations,
+        transform: alignment.transform,
+        track: track,
+      );
+      debugPrint('DRS zones: ${drsZones.value}');
+    } catch (e) {
+      debugPrint('No DRS zones: $e');
     }
   }
 
@@ -303,6 +392,8 @@ class RaceReplay extends ChangeNotifier {
   void dispose() {
     _disposed = true;
     time.dispose();
+    standings.dispose();
+    drsZones.dispose();
     super.dispose();
   }
 }

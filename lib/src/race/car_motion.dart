@@ -8,13 +8,16 @@ import 'location_timeline.dart';
 
 /// Where a car is at some moment, in scene space.
 class CarPose {
-  const CarPose(this.position, this.heading);
+  const CarPose(this.position, this.heading, {this.inPit = false});
 
   /// On the driving surface.
   final Vector3 position;
 
   /// Yaw in radians about +Y; 0 faces +Z.
   final double heading;
+
+  /// In the pit lane, or crossing into or out of it.
+  final bool inPit;
 }
 
 /// Turns raw OpenF1 position samples into poses that ride the track.
@@ -120,7 +123,7 @@ class CarMotion {
       // Yaw into a lane change, capped so noise never spins a car.
       heading += math.atan2((lb - la) / dt, speed).clamp(-0.5, 0.5);
     }
-    return CarPose(placed.position, heading);
+    return CarPose(placed.position, heading, inPit: onPit);
   }
 
   /// Crossing between track and pit lane: straight-line blend of the two
@@ -128,7 +131,11 @@ class CarMotion {
   CarPose _blend(_Located a, _Located b, double f) {
     final x = a.x + (b.x - a.x) * f, z = a.z + (b.z - a.z) * f;
     final y = track.place(a.track.along, 0).position.y;
-    return CarPose(Vector3(x, y, z), math.atan2(b.x - a.x, b.z - a.z));
+    return CarPose(
+      Vector3(x, y, z),
+      math.atan2(b.x - a.x, b.z - a.z),
+      inPit: true,
+    );
   }
 
   _Located _locate(int driver, double rawX, double rawY) {

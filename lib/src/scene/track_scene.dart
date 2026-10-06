@@ -50,6 +50,7 @@ class TrackScene {
   RaceReplay? _replay;
   CarsLayer? _cars;
   Node? _raceRoot;
+  Node? _drsNode;
   double _baseY = 0;
 
   /// World meters between the lowest point of the track and the slab.
@@ -74,11 +75,17 @@ class TrackScene {
     ..baseColorFactor = linearColor(0x1A1D23)
     ..metallicFactor = 0
     ..roughnessFactor = 0.95;
-  final _lineMaterial = PhysicallyBasedMaterial()
-    ..metallicFactor = 0
-    ..roughnessFactor = 0.6
-    // Lies on the track surface; win the depth tie at any distance.
-    ..depthLayer = 1;
+  // Markings lie flush on the track surface and win the depth tie by
+  // layer: kerbs over the surface, DRS bands over kerbs, lines over all.
+  final _kerbMaterial = _overlay(depthLayer: 1);
+  final _drsMaterial = _overlay(depthLayer: 2);
+  final _lineMaterial = _overlay(depthLayer: 3);
+
+  static PhysicallyBasedMaterial _overlay({required int depthLayer}) =>
+      PhysicallyBasedMaterial()
+        ..metallicFactor = 0
+        ..roughnessFactor = 0.6
+        ..depthLayer = depthLayer;
   final _pitMaterial = PhysicallyBasedMaterial()
     ..metallicFactor = 0
     ..roughnessFactor = 0.7
@@ -206,10 +213,24 @@ class TrackScene {
       ..add(Node(name: 'track', mesh: trackMesh))
       ..add(
         Node(
+          name: 'kerbs',
+          mesh: Mesh(_geometry(builder.kerbs()), _kerbMaterial),
+        ),
+      )
+      ..add(
+        Node(
           name: 'start-finish',
           mesh: Mesh(_geometry(builder.startFinishLine()), _lineMaterial),
         ),
       );
+    if (circuit.sectors.length > 1) {
+      root.add(
+        Node(
+          name: 'sector lines',
+          mesh: Mesh(_geometry(builder.sectorLines()), _lineMaterial),
+        ),
+      );
+    }
     scene.add(root);
 
     _circuit = circuit;
@@ -236,6 +257,8 @@ class TrackScene {
   void showRace(RaceReplay? replay) {
     final previous = _raceRoot;
     if (previous != null) scene.remove(previous);
+    _replay?.drsZones.removeListener(_showDrsZones);
+    _drsNode = null;
     _replay = replay;
     _poses = const {};
     _cars = null;
@@ -272,9 +295,30 @@ class TrackScene {
     scene.add(root);
     _cars = cars;
     _raceRoot = root;
+    replay.drsZones.addListener(_showDrsZones);
+    _showDrsZones();
     if (!replay.drivers.any((d) => d.number == _followed)) {
       followedDriver = replay.featuredDriver;
     }
+  }
+
+  /// (Re)draws the current replay's DRS zones, which arrive after it loads.
+  void _showDrsZones() {
+    final replay = _replay, root = _raceRoot, builder = _builder;
+    if (replay == null || root == null || builder == null) return;
+    final previous = _drsNode;
+    if (previous != null) root.remove(previous);
+    final zones = replay.drsZones.value;
+    if (zones.isEmpty) return;
+    final node = Node(
+      name: 'drs zones',
+      mesh: Mesh(
+        _geometry(builder.drsBands([for (final z in zones) (z.start, z.end)])),
+        _drsMaterial,
+      ),
+    );
+    root.add(node);
+    _drsNode = node;
   }
 
   /// Per-frame update: advances the replay and poses the cars. Runs before
@@ -283,7 +327,7 @@ class TrackScene {
     final replay = _replay, cars = _cars;
     if (replay == null || cars == null) return;
     replay.tick(deltaSeconds);
-    _poses = replay.poses();
+    _poses = replay.currentPoses;
     // From the orbit camera, grow cars with distance so they stay readable;
     // the chase and TV cameras are close enough for real size.
     final scale = _cameraMode == CameraMode.orbit

@@ -10,8 +10,10 @@ import '../race/race_repository.dart';
 import '../race/venues.dart';
 import '../scene/track_scene.dart';
 import 'camera_bar.dart';
+import 'driver_card.dart';
 import 'hud.dart';
 import 'race_picker.dart';
+import 'timing_tower.dart';
 import 'timeline_bar.dart';
 
 /// Full-screen race replay on a circuit diorama, with a heads-up overlay.
@@ -239,6 +241,67 @@ class _TrackScreenState extends State<TrackScreen> {
     }
   }
 
+  /// The race picker, and either the circuit card or, during a race, the
+  /// timing tower and the followed driver's card.
+  Widget _topOverlay(Circuit? circuit) {
+    final replay = _replay;
+    final followed = _trackScene.followedDriver;
+    final picker = RacePicker(
+      seasons: _seasons,
+      season: _season,
+      races: _seasonRaces,
+      race: _race,
+      onSeason: _selectSeason,
+      onRace: _selectRace,
+    );
+    final Widget primary;
+    if (replay != null) {
+      primary = TimingTower(
+        replay: replay,
+        followed: followed,
+        onSelect: _follow,
+      );
+    } else if (circuit != null) {
+      primary = CircuitCard(circuit: circuit, race: _race);
+    } else {
+      primary = const SizedBox.shrink();
+    }
+    final card = replay != null && followed != null
+        ? DriverCard(replay: replay, driver: followed)
+        : null;
+
+    return LayoutBuilder(
+      builder: (context, constraints) {
+        // The tower scrolls when the window is too short for every row.
+        final scrolling = SingleChildScrollView(child: primary);
+        if (constraints.maxWidth < 720) {
+          return Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              picker,
+              const SizedBox(height: 12),
+              Flexible(child: scrolling),
+            ],
+          );
+        }
+        return Row(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            scrolling,
+            const Spacer(),
+            Column(
+              crossAxisAlignment: CrossAxisAlignment.end,
+              children: [
+                picker,
+                if (card != null) ...[const SizedBox(height: 12), card],
+              ],
+            ),
+          ],
+        );
+      },
+    );
+  }
+
   @override
   Widget build(BuildContext context) {
     final circuit = _circuit;
@@ -276,24 +339,7 @@ class _TrackScreenState extends State<TrackScreen> {
               child: Column(
                 crossAxisAlignment: CrossAxisAlignment.stretch,
                 children: [
-                  Wrap(
-                    alignment: WrapAlignment.spaceBetween,
-                    spacing: 16,
-                    runSpacing: 12,
-                    children: [
-                      if (circuit != null)
-                        CircuitCard(circuit: circuit, race: _race),
-                      RacePicker(
-                        seasons: _seasons,
-                        season: _season,
-                        races: _seasonRaces,
-                        race: _race,
-                        onSeason: _selectSeason,
-                        onRace: _selectRace,
-                      ),
-                    ],
-                  ),
-                  const Spacer(),
+                  Expanded(child: _topOverlay(circuit)),
                   Wrap(
                     spacing: 8,
                     runSpacing: 12,
