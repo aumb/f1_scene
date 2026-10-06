@@ -5,6 +5,9 @@ import 'package:flutter/services.dart';
 import 'src/ui/track_screen.dart';
 
 void main() {
+  // The bindings carry the call below to the browser; without them it
+  // fails (the wasm build says so, the JS build silently does nothing).
+  WidgetsFlutterBinding.ensureInitialized();
   // Right-drag pans the camera; keep the browser's menu out of the way.
   if (kIsWeb) BrowserContextMenu.disableContextMenu();
   runApp(const F1SceneApp());
