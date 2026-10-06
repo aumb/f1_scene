@@ -1,0 +1,73 @@
+# Checks and builds every push and pull request; on main, also publishes the
+# web app to GitHub Pages.
+#
+# Checking and building run side by side (each takes a few minutes on a
+# hosted runner), and the deploy waits for both, so a failing test still
+# keeps a broken build off the site.
+#
+# One-time setup in the repository: Settings > Pages > Build and deployment >
+# Source: GitHub Actions.
+name: CI and Pages
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+# A new push to a pull request supersedes its running checks. On main, runs
+# queue instead: cancelling one mid-deploy can leave Pages half updated.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: subosito/flutter-action@v2
+        with:
+          channel: stable
+          flutter-version: 3.47.2
+          cache: true
+      - run: flutter pub get
+      - run: dart format --output=none --set-exit-if-changed lib test tool
+      - run: flutter analyze
+      - run: flutter test
+
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: subosito/flutter-action@v2
+        with:
+          channel: stable
+          flutter-version: 3.47.2
+          cache: true
+      # Pages serves the site under /<repository>/. WebAssembly where the
+      # browser supports it (WasmGC: Chrome and Edge 119+, Firefox 120+,
+      # Safari 18.2+); the same build carries the JavaScript version, which
+      # the loader picks everywhere else.
+      - run: flutter build web --release --wasm --base-href "/${{ github.event.repository.name }}/"
+      - if: github.ref == 'refs/heads/main'
+        uses: actions/upload-pages-artifact@v5
+        with:
+          path: build/web
+
+  deploy:
+    if: github.ref == 'refs/heads/main'
+    needs: [check, build]
+    runs-on: ubuntu-latest
+    permissions:
+      pages: write
+      id-token: write
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - id: deployment
+        uses: actions/deploy-pages@v5
