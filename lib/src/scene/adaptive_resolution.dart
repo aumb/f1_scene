@@ -54,13 +54,21 @@ class AdaptiveResolution {
     final sorted = [..._intervals]..sort();
     _intervals.clear();
     _elapsed = 0;
-    // The fastest tenth of frames ran at the refresh rate; remember the
-    // fastest seen, so a GPU slow on every frame doesn't pass for a slow
-    // display, letting it drift up slowly in case the display changes.
+    // The fastest tenth of frames ran at the refresh rate (the app idles
+    // at it while loading). Remember the fastest seen, so a GPU slow on
+    // every frame doesn't pass for a slow display; it drifts up only very
+    // slowly, for a window moved to a slower display, and is never taken
+    // as slower than 60 Hz.
     final fastest = sorted[sorted.length ~/ 10];
-    final refresh = _refresh = math.min((_refresh ?? fastest) * 1.01, fastest);
+    final refresh = _refresh = math.min(
+      math.min((_refresh ?? fastest) * 1.001, fastest),
+      1 / 60,
+    );
+    // A frame well over the refresh interval missed it. Frame intervals
+    // snap to the refresh on some renderers (a miss reads as two
+    // intervals) but not others (it reads as, say, 13 ms at 120 Hz).
     final missed =
-        sorted.where((d) => d > refresh * 1.5).length / sorted.length;
+        sorted.where((d) => d > refresh * 1.25).length / sorted.length;
 
     final before = _scale;
     if (missed > 0.15) {

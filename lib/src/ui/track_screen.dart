@@ -266,8 +266,10 @@ class _TrackScreenState extends State<TrackScreen> {
       _resolution.start(size.width * size.height * ratio * ratio);
       scene.renderScale = _resolution.scale;
       _resolutionStarted = true;
+      if (_showStats) debugPrint('Render scale ${_resolution.scale} to start');
     } else if (_resolution.record(dt)) {
       scene.renderScale = _resolution.scale;
+      if (_showStats) debugPrint('Render scale ${_resolution.scale}');
     }
     _frameStats.renderScale = scene.renderScale;
   }

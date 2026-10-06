@@ -26,9 +26,13 @@ Requires Flutter 3.47 or newer (stable).
 
 ```sh
 flutter pub get
-flutter run -d chrome      # web, the primary target
+flutter run -d chrome --release --wasm   # web, the primary target
 flutter run -d macos       # native; Flutter GPU is enabled in the platform files
 ```
+
+On the web, `--wasm` compiles to WebAssembly (about 8% faster frames here
+than JavaScript); browsers without WasmGC fall back to the JavaScript build
+on their own. Judge performance in `--release`: debug builds are much slower.
 
 ```sh
 flutter test               # geometry tests run against all 31 circuits
@@ -129,7 +133,10 @@ to 1) fixes the scale instead.
 tests, builds the web app and publishes it to GitHub Pages on every push to
 `main`. One-time setup in the repository: **Settings → Pages → Build and
 deployment → Source: GitHub Actions**. The site is served under
-`/<repository>/`, which the build's `--base-href` matches.
+`/<repository>/`, which the build's `--base-href` matches. The build is
+WebAssembly with the JavaScript fallback alongside. GitHub Pages can't send
+the cross-origin isolation headers Flutter's multi-threaded renderer needs,
+so it runs single-threaded there, which is what was measured.
 
 ## Data
 

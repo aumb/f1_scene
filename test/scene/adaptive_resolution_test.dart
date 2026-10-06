@@ -51,6 +51,19 @@ void main() {
     expect(r.scale, greaterThan(0.5));
   });
 
+  test('sees misses in frame intervals that do not snap to the refresh', () {
+    // The wasm renderer reports a GPU-bound frame as, say, 13 ms rather
+    // than two 8.3 ms refresh intervals.
+    final r = AdaptiveResolution()..start(1e6);
+    run(r, 2); // loading: frames at the refresh rate
+    var t = 0.0;
+    while (t < 40) {
+      r.record(0.0133);
+      t += 0.0133;
+    }
+    expect(r.scale, 0.5);
+  });
+
   test('ignores pauses and a little noise', () {
     final r = AdaptiveResolution()..start(1e6);
     r.record(2.0); // a hidden tab

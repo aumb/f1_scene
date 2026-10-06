@@ -32,7 +32,10 @@ jobs:
       - run: flutter analyze
       - run: flutter test
       # Pages serves the site under /<repository>/.
-      - run: flutter build web --release --base-href "/${{ github.event.repository.name }}/"
+      # WebAssembly where the browser supports it (WasmGC: Chrome and Edge
+      # 119+, Firefox 120+, Safari 18.2+); the same build carries the
+      # JavaScript version, which the loader picks everywhere else.
+      - run: flutter build web --release --wasm --base-href "/${{ github.event.repository.name }}/"
       - uses: actions/upload-pages-artifact@v5
         with:
           path: build/web
