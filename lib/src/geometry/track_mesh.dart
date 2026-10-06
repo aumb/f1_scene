@@ -12,11 +12,13 @@ class MeshArrays {
     required this.normals,
     required this.indices,
     this.colors,
+    this.texCoords,
   });
 
   final Float32List positions;
   final Float32List normals;
   final Float32List? colors;
+  final Float32List? texCoords;
   final Uint32List indices;
 
   int get vertexCount => positions.length ~/ 3;

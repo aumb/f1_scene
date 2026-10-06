@@ -476,7 +476,7 @@ class TrackScene implements CameraInput {
     _raceRoot = null;
     if (replay == null) return;
 
-    final cars = CarsLayer(replay.drivers);
+    final cars = CarsLayer(replay.drivers, year: replay.session.year);
     final root = Node(name: 'race')..add(cars.root);
     final pitLane = replay.pitLane;
     if (pitLane != null) {

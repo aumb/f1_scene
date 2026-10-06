@@ -5,39 +5,78 @@ import 'package:vector_math/vector_math.dart';
 
 import 'track_mesh.dart';
 
-/// A low-poly 2026-proportioned F1 car, one mesh per material.
+/// Colours for the painted parts of a car, linear RGBA.
+typedef CarPaint = ({
+  Vector4 upper,
+  Vector4 lower,
+  Vector4 nose,
+  Vector4 engineCover,
+  Vector4 wings,
+});
+
+/// A low-poly 2026-proportioned F1 car, built in parts so a livery can
+/// paint each its own colour.
 ///
 /// Car space: origin on the ground under the middle of the car, +Z forward,
-/// +Y up, +X to the car's left. About 5.4 m long and 1.9 m wide.
+/// +Y up and, flutter_scene's world being left-handed, +X to the car's
+/// right. About 5.4 m long and 1.9 m wide.
 class CarMeshes {
-  CarMeshes._(this.body, this.carbon, this.tyres, this.accent);
+  CarMeshes._({
+    required this.upper,
+    required this.lower,
+    required this.nose,
+    required this.engineCover,
+    required this.wings,
+    required this.carbon,
+    required this.tyres,
+    required this.accent,
+    required this.numberPlates,
+  });
 
   /// Builds the car. Pure Dart; no GPU needed.
   factory CarMeshes.build() {
-    final body = _Accumulator();
+    final upper = _Accumulator();
+    final lower = _Accumulator();
+    final nose = _Accumulator();
+    final engineCover = _Accumulator();
+    final wings = _Accumulator();
     final carbon = _Accumulator();
     final tyres = _Accumulator();
     final accent = _Accumulator();
 
-    // Monocoque, nose to gearbox: (z, center height, width, height).
-    body.loft(const [
+    // Nose, then the monocoque back to the gearbox, split a little below
+    // its middle into upper and lower paint: (z, center height, width,
+    // height).
+    nose.loft(const [
       (2.62, 0.21, 0.14, 0.10),
       (2.05, 0.29, 0.30, 0.22),
       (1.35, 0.37, 0.46, 0.36),
-      (0.70, 0.45, 0.62, 0.50),
-      (0.00, 0.46, 0.78, 0.56),
-      (-0.80, 0.52, 0.66, 0.66),
-      (-1.60, 0.42, 0.44, 0.42),
-      (-2.15, 0.34, 0.26, 0.24),
-    ]);
+    ], capBack: false);
+    upper.loft(
+      const [
+        (1.35, 0.37, 0.46, 0.36),
+        (0.70, 0.45, 0.62, 0.50),
+        (0.00, 0.46, 0.78, 0.56),
+        (-0.80, 0.52, 0.66, 0.66),
+        (-1.60, 0.42, 0.44, 0.42),
+        (-2.15, 0.34, 0.26, 0.24),
+      ],
+      below: lower,
+      split: -0.15,
+      capFront: false,
+    );
     // Sidepods either side of the cockpit, undercut toward the back.
-    body.loft(const [
-      (0.45, 0.34, 1.30, 0.30),
-      (-0.20, 0.35, 1.44, 0.40),
-      (-1.25, 0.28, 0.86, 0.26),
-    ]);
+    upper.loft(
+      const [
+        (0.45, 0.34, 1.30, 0.30),
+        (-0.20, 0.35, 1.44, 0.40),
+        (-1.25, 0.28, 0.86, 0.26),
+      ],
+      below: lower,
+      split: 0.1,
+    );
     // Airbox and engine-cover fin above and behind the driver.
-    body.loft(const [
+    engineCover.loft(const [
       (-0.05, 0.86, 0.20, 0.16),
       (-0.45, 0.84, 0.24, 0.26),
       (-1.30, 0.66, 0.06, 0.20),
@@ -46,13 +85,16 @@ class CarMeshes {
     // Floor, wings and their supports.
     carbon.box(Vector3(0, 0.06, -0.25), Vector3(1.50, 0.04, 3.30));
     carbon.box(Vector3(0, 0.10, 2.45), Vector3(1.80, 0.05, 0.42));
-    body.box(Vector3(0, 0.18, 2.36), Vector3(1.66, 0.04, 0.20), pitch: -0.35);
+    wings.box(Vector3(0, 0.18, 2.36), Vector3(1.66, 0.04, 0.20), pitch: -0.35);
     for (final side in [-1.0, 1.0]) {
       carbon.box(Vector3(side * 0.91, 0.16, 2.45), Vector3(0.03, 0.22, 0.46));
-      carbon.box(Vector3(side * 0.50, 0.70, -2.36), Vector3(0.03, 0.50, 0.56));
+      carbon.box(
+        Vector3(side * _endplateX, 0.70, -2.36),
+        Vector3(_endplateThickness, 0.50, 0.56),
+      );
     }
-    body.box(Vector3(0, 0.88, -2.40), Vector3(1.00, 0.05, 0.32));
-    body.box(Vector3(0, 0.98, -2.28), Vector3(1.00, 0.04, 0.18), pitch: 0.5);
+    wings.box(Vector3(0, 0.88, -2.40), Vector3(1.00, 0.05, 0.32));
+    wings.box(Vector3(0, 0.98, -2.28), Vector3(1.00, 0.04, 0.18), pitch: 0.5);
     carbon.box(Vector3(0, 0.62, -2.30), Vector3(0.06, 0.48, 0.20));
     // Beam wing, its top kept clear of the pylon's base.
     carbon.box(Vector3(0, 0.34, -2.30), Vector3(0.94, 0.04, 0.16));
@@ -78,24 +120,141 @@ class CarMeshes {
     }
 
     return CarMeshes._(
-      body.build(),
-      carbon.build(),
-      tyres.build(),
-      accent.build(),
+      upper: upper.build(),
+      lower: lower.build(),
+      nose: nose.build(),
+      engineCover: engineCover.build(),
+      wings: wings.build(),
+      carbon: carbon.build(),
+      tyres: tyres.build(),
+      accent: accent.build(),
+      numberPlates: _numberPlates(),
     );
   }
 
-  /// Painted in the team colour.
-  final MeshArrays body;
+  static const _endplateX = 0.50, _endplateThickness = 0.03;
 
-  /// Floor, wing elements, halo.
+  /// Painted bodywork above the livery's dividing line.
+  final MeshArrays upper;
+
+  /// Painted bodywork below it.
+  final MeshArrays lower;
+  final MeshArrays nose;
+  final MeshArrays engineCover;
+
+  /// Front wing flap and rear wing planes.
+  final MeshArrays wings;
+
+  /// Floor, wing supports, endplates, halo.
   final MeshArrays carbon;
   final MeshArrays tyres;
 
   /// Helmet and wheel covers.
   final MeshArrays accent;
 
-  List<MeshArrays> get all => [body, carbon, tyres, accent];
+  /// Where the car number goes: on top of the nose, reading from the front,
+  /// and on the outside of both rear wing endplates, reading from beside.
+  /// Each plate maps the whole number image (u across, v down).
+  final MeshArrays numberPlates;
+
+  List<MeshArrays> get all => [
+    upper,
+    lower,
+    nose,
+    engineCover,
+    wings,
+    carbon,
+    tyres,
+    accent,
+  ];
+
+  /// The painted parts as one mesh, coloured per vertex, so a car draws
+  /// its bodywork in one call whatever the livery.
+  MeshArrays paint(CarPaint paint) {
+    final parts = [
+      (upper, paint.upper),
+      (lower, paint.lower),
+      (nose, paint.nose),
+      (engineCover, paint.engineCover),
+      (wings, paint.wings),
+    ];
+    final vertices = parts.fold(0, (n, p) => n + p.$1.vertexCount);
+    final triangles = parts.fold(0, (n, p) => n + p.$1.triangleCount);
+    final positions = Float32List(vertices * 3);
+    final normals = Float32List(vertices * 3);
+    final colors = Float32List(vertices * 4);
+    final indices = Uint32List(triangles * 3);
+    var v = 0, i = 0;
+    for (final (mesh, colour) in parts) {
+      positions.setAll(v * 3, mesh.positions);
+      normals.setAll(v * 3, mesh.normals);
+      for (var k = 0; k < mesh.vertexCount; k++) {
+        colors.setAll((v + k) * 4, colour.storage);
+      }
+      for (final index in mesh.indices) {
+        indices[i++] = index + v;
+      }
+      v += mesh.vertexCount;
+    }
+    return MeshArrays(
+      positions: positions,
+      normals: normals,
+      colors: colors,
+      indices: indices,
+    );
+  }
+
+  static MeshArrays _numberPlates() {
+    final positions = <double>[], normals = <double>[], uvs = <double>[];
+    final indices = <int>[];
+    // Corners listed top left, top right, bottom right, bottom left as the
+    // number would read in a right-handed world; flutter_scene's is
+    // left-handed, which mirrors it, so the image is mapped mirrored back.
+    void plate(List<Vector3> corners, Vector3 normal) {
+      final base = positions.length ~/ 3;
+      const uv = [(1.0, 0.0), (0.0, 0.0), (0.0, 1.0), (1.0, 1.0)];
+      for (var k = 0; k < 4; k++) {
+        positions.addAll([corners[k].x, corners[k].y, corners[k].z]);
+        normals.addAll([normal.x, normal.y, normal.z]);
+        uvs.addAll([uv[k].$1, uv[k].$2]);
+      }
+      // Counter-clockwise seen from the side the normal faces.
+      indices.addAll([base, base + 3, base + 2, base, base + 2, base + 1]);
+    }
+
+    // On the nose's flat top between the sections at z 2.05 and 1.35, a
+    // centimetre proud of it; the number's top points at the cockpit.
+    double noseTop(double z) => 0.40 + (2.05 - z) / 0.70 * 0.15 + 0.012;
+    const back = 1.70, front = 1.81, half = 0.085;
+    final slope = Vector3(0, 0.15, -0.70)..normalize();
+    final up = Vector3(0, 1, 0)..sub(slope * slope.y);
+    plate([
+      Vector3(-half, noseTop(back), back),
+      Vector3(half, noseTop(back), back),
+      Vector3(half, noseTop(front), front),
+      Vector3(-half, noseTop(front), front),
+    ], up.normalized());
+
+    // Outside each rear wing endplate, upright, reading front to back from
+    // the left and back to front from the right.
+    const top = 0.86, bottom = 0.58, fore = -2.14, aft = -2.58;
+    for (final side in [-1.0, 1.0]) {
+      final x = side * (_endplateX + _endplateThickness / 2 + 0.006);
+      final (start, end) = side > 0 ? (fore, aft) : (aft, fore);
+      plate([
+        Vector3(x, top, start),
+        Vector3(x, top, end),
+        Vector3(x, bottom, end),
+        Vector3(x, bottom, start),
+      ], Vector3(side, 0, 0));
+    }
+    return MeshArrays(
+      positions: Float32List.fromList(positions),
+      normals: Float32List.fromList(normals),
+      texCoords: Float32List.fromList(uvs),
+      indices: Uint32List.fromList(indices),
+    );
+  }
 }
 
 /// Collects triangles wound to face away from each part's interior, then
@@ -154,44 +313,85 @@ class _Accumulator {
   }
 
   /// A body lofted through chamfered-rectangle sections
-  /// `(z, center height, width, height)`, capped at both ends.
-  void loft(List<(double, double, double, double)> sections) {
-    final rings = <List<int>>[];
+  /// `(z, center height, width, height)`, capped at the ends asked for.
+  ///
+  /// With [below], each section is cut across its sides at [split] (a
+  /// fraction of its half-height above its center) and the faces under the
+  /// cut go to [below]: two paints meeting along a clean line.
+  void loft(
+    List<(double, double, double, double)> sections, {
+    _Accumulator? below,
+    double split = 0,
+    bool capFront = true,
+    bool capBack = true,
+  }) {
+    final rings = <List<Vector3>>[];
     final centers = <Vector3>[];
+    // Each outline point's height relative to its section's center, as a
+    // fraction of the half-height: the same for every section.
+    late List<double> heights;
     for (final (z, y, w, h) in sections) {
       final c = math.min(w, h) * 0.32;
       final hw = w / 2, hh = h / 2;
+      final side = 1 - c / hh;
       final outline = [
-        (hw - c, hh),
-        (hw, hh - c),
-        (hw, -hh + c),
-        (hw - c, -hh),
-        (-hw + c, -hh),
-        (-hw, -hh + c),
-        (-hw, hh - c),
-        (-hw + c, hh),
+        (hw - c, 1.0),
+        (hw, side),
+        if (below != null) (hw, split),
+        (hw, -side),
+        (hw - c, -1.0),
+        (-hw + c, -1.0),
+        (-hw, -side),
+        if (below != null) (-hw, split),
+        (-hw, side),
+        (-hw + c, 1.0),
       ];
-      rings.add([
-        for (final (x, dy) in outline) _vertex(Vector3(x, y + dy, z)),
-      ]);
+      heights = [for (final (_, f) in outline) f];
+      rings.add([for (final (x, f) in outline) Vector3(x, y + f * hh, z)]);
       centers.add(Vector3(0, y, z));
     }
+    // Faces between outline points j and j + 1 go where their middle is.
+    final n = heights.length;
+    _Accumulator target(int j) =>
+        below != null && heights[j] + heights[(j + 1) % n] < 2 * split
+        ? below
+        : this;
+    // Vertices are shared within each part (smooth shading) but not across
+    // the cut (a crisp line between the paints).
+    final ids = <_Accumulator, Map<int, int>>{};
+    int vertex(_Accumulator part, int ring, int j) =>
+        ids.putIfAbsent(part, () => {})[ring * n + j] ??= part._vertex(
+          rings[ring][j],
+        );
     for (var k = 0; k + 1 < rings.length; k++) {
       final interior = (centers[k] + centers[k + 1]) / 2;
-      final a = rings[k], b = rings[k + 1];
-      for (var j = 0; j < a.length; j++) {
-        final j1 = (j + 1) % a.length;
-        _quad(a[j], a[j1], b[j1], b[j], interior);
+      for (var j = 0; j < n; j++) {
+        final j1 = (j + 1) % n, part = target(j);
+        part._quad(
+          vertex(part, k, j),
+          vertex(part, k, j1),
+          vertex(part, k + 1, j1),
+          vertex(part, k + 1, j),
+          interior,
+        );
       }
     }
     // Fan caps, oriented away from the neighbouring section.
-    for (final (ring, center, inside) in [
-      (rings.first, centers.first, centers[1]),
-      (rings.last, centers.last, centers[centers.length - 2]),
+    for (final (cap, ring, inside) in [
+      if (capFront) (true, 0, centers[1]),
+      if (capBack) (true, rings.length - 1, centers[centers.length - 2]),
     ]) {
-      final hub = _vertex(center);
-      for (var j = 0; j < ring.length; j++) {
-        _triangle(hub, ring[j], ring[(j + 1) % ring.length], inside);
+      if (!cap) continue;
+      final hubs = <_Accumulator, int>{};
+      for (var j = 0; j < n; j++) {
+        final part = target(j);
+        final hub = hubs[part] ??= part._vertex(centers[ring]);
+        part._triangle(
+          hub,
+          vertex(part, ring, j),
+          vertex(part, ring, (j + 1) % n),
+          inside,
+        );
       }
     }
   }
