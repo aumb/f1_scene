@@ -29,6 +29,17 @@ void main() {
     expect(hinted.along, closeTo(285, 0.5));
   });
 
+  test('a point just beyond the hinted window is not pinned to its edge', () {
+    // 66 stations ahead of the hint (a car 1.3 s ahead at 330 km/h), and
+    // within reach of the window's last segment.
+    for (final hint in [100, stations.length - 30]) {
+      final along = (hint + 66) % stations.length;
+      final p = projector.place(along.toDouble(), 0).position;
+      final hinted = projector.project(p.x, p.z, hint: hint);
+      expect(hinted.along, closeTo(along, 0.05), reason: 'hint $hint');
+    }
+  });
+
   test('lateral limits keep a car inside the edges', () {
     final (right, left) = projector.lateralLimits(100, margin: 1);
     expect(left, closeTo(stations.leftOffset[100] - 1, 1e-9));

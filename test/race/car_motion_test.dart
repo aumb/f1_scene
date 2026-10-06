@@ -5,6 +5,7 @@ import 'package:f1_scene/src/geometry/track_mesh.dart';
 import 'package:f1_scene/src/geometry/track_projector.dart';
 import 'package:f1_scene/src/race/car_motion.dart';
 import 'package:f1_scene/src/race/location_timeline.dart';
+import 'package:f1_scene/src/race/race_repository.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:vector_math/vector_math.dart' show Matrix4, Vector3;
 
@@ -61,6 +62,30 @@ void main() {
     for (var t = 0.3; t < 3; t += 0.1) {
       final speed = at(t + dt).distanceTo(at(t)) / dt;
       expect(speed, closeTo(80, 2), reason: 't $t');
+    }
+  });
+
+  test('holds a steady speed through noisy sample times', () {
+    // 80 m/s with each stamp up to 15 ms off, what remains after stamp
+    // correction: passing through every sample swings it by 10% or more.
+    final random = math.Random(3);
+    final batch = LocationBatch(DateTime.utc(2024));
+    for (var k = 0; k < 60; k++) {
+      final time = k * 0.26;
+      final along = 1000 + time * 80 / track.metersPerStation;
+      final p = track.place(along, 0).position;
+      batch.add(1, time + (random.nextDouble() * 2 - 1) * 0.015, p.x, p.z);
+    }
+    final timeline = LocationTimeline(start: 0, end: 20)..addChunk(0, batch);
+    final motion = CarMotion(alignment: identity, track: track);
+    Vector3 at(double t) => motion
+        .pose(1, timeline.windowAt(1, t, reach: CarMotion.smoothing), t)!
+        .position;
+
+    const dt = 1 / 60;
+    for (var t = 2.0; t < 12; t += dt) {
+      final speed = at(t + dt).distanceTo(at(t)) / dt;
+      expect(speed, closeTo(80, 4), reason: 't $t');
     }
   });
 

@@ -75,7 +75,19 @@ class TrackProjector {
   PathPoint project(double x, double z, {int? hint}) {
     if (hint != null) {
       final near = _best(x, z, hint - _window, hint + _window);
-      if (near.distance <= _maxHintedDistance) return near;
+      // A match on the window's last segment either side may really lie
+      // beyond it: the point is just past the window, and the closest spot
+      // within it is the window's end.
+      var offset = near.station - hint;
+      if (stations.closed) {
+        final n = stations.length;
+        offset = (offset + n ~/ 2) % n - n ~/ 2;
+      }
+      if (near.distance <= _maxHintedDistance &&
+          offset > -_window &&
+          offset < _window) {
+        return near;
+      }
     }
     final nearest = _grid.nearest(x, z).index;
     return _best(x, z, nearest - 2, nearest + 2);
@@ -94,7 +106,17 @@ class TrackProjector {
     final i0 = math.min(a.floor(), stations.segmentCount - 1);
     final i1 = (i0 + 1) % n;
     final f = a - i0;
-    final center = _lerp(stations.center[i0], stations.center[i1], f);
+    // A cubic through the two stations along their directions rather than
+    // the straight chord, so anything moving along the path turns smoothly
+    // instead of a little at every station.
+    final c0 = stations.center[i0], c1 = stations.center[i1];
+    final length = c0.distanceTo(c1);
+    final f2 = f * f, f3 = f2 * f;
+    final center =
+        c0 * (2 * f3 - 3 * f2 + 1) +
+        stations.forward[i0] * ((f3 - 2 * f2 + f) * length) +
+        c1 * (-2 * f3 + 3 * f2) +
+        stations.forward[i1] * ((f3 - f2) * length);
     final left = _lerp(stations.left[i0], stations.left[i1], f)..normalize();
     final forward = _lerp(stations.forward[i0], stations.forward[i1], f)
       ..normalize();

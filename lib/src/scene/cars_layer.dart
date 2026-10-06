@@ -5,6 +5,7 @@ import '../geometry/car_mesh.dart';
 import '../geometry/track_mesh.dart';
 import '../race/car_motion.dart';
 import '../race/race_models.dart';
+import '../race/traffic.dart';
 
 /// One car model per driver, posed from replay poses every frame.
 ///
@@ -51,8 +52,10 @@ class CarsLayer {
   static final _highlight = vm.Vector4(1, 1, 1, 1);
 
   /// Places every car in [poses] and hides the rest. [scale] enlarges the
-  /// cars uniformly about their contact point.
+  /// cars about their contact point, each only as far as it stays clear of
+  /// the others (see [readableScales]).
   void update(Map<int, CarPose> poses, {double scale = 1}) {
+    final scales = scale > 1 ? readableScales(poses, scale) : const {};
     for (final MapEntry(key: number, value: node) in _cars.entries) {
       final pose = poses[number];
       if (pose == null) {
@@ -64,7 +67,7 @@ class CarsLayer {
         ..localTransform = vm.Matrix4.compose(
           pose.position,
           pose.rotation,
-          vm.Vector3.all(scale),
+          vm.Vector3.all(scales[number] ?? scale),
         );
     }
   }

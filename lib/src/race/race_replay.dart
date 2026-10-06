@@ -12,7 +12,9 @@ import 'location_timeline.dart';
 import 'pit_lane_tracer.dart';
 import 'race_models.dart';
 import 'race_repository.dart';
+import 'stamp_jitter.dart';
 import 'timing_board.dart';
+import 'traffic.dart';
 
 /// Plays back one race: owns its data, the alignment from OpenF1's circuit
 /// frame onto the scene, and the playback clock.
@@ -212,6 +214,7 @@ class RaceReplay extends ChangeNotifier {
 
   final RaceRepository _repository;
   final CarMotion _motion;
+  late final _traffic = TrafficSeparation(_motion.track);
   final List<double> _leaderLapStarts;
   final _retryAfter = <int, DateTime>{};
   bool _disposed = false;
@@ -337,17 +340,24 @@ class RaceReplay extends ChangeNotifier {
     }
   }
 
-  /// Every driver with data at the playhead, in scene space.
+  /// Every driver with data at the playhead, in scene space, side by side
+  /// where the data has them in the same spot.
   Map<int, CarPose> poses() {
     final t = time.value;
-    return {for (final d in drivers) d.number: ?_poseOf(d.number, t)};
+    return _traffic.separate({
+      for (final d in drivers) d.number: ?_poseOf(d.number, t),
+    });
   }
 
   /// One car's pose. Release builds hide a car whose data trips the motion
   /// code rather than freezing every car; debug builds surface the error.
   CarPose? _poseOf(int driver, double t) {
     try {
-      return _motion.pose(driver, timeline.windowAt(driver, t), t);
+      return _motion.pose(
+        driver,
+        timeline.windowAt(driver, t, reach: CarMotion.smoothing),
+        t,
+      );
     } catch (e) {
       if (kDebugMode) rethrow;
       if (_failedDrivers.add(driver)) debugPrint('Car $driver hidden: $e');
@@ -379,7 +389,9 @@ class RaceReplay extends ChangeNotifier {
         to: at(to),
       );
       if (_disposed) return;
-      timeline.addChunk(chunk, batch);
+      final corrected = await correctStampJitter(batch);
+      if (_disposed) return;
+      timeline.addChunk(chunk, corrected);
     } catch (e) {
       if (_disposed) return;
       debugPrint('Location chunk $chunk failed: $e');

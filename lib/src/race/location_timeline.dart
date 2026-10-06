@@ -73,11 +73,12 @@ class LocationTimeline {
 
   Iterable<int> get drivers => _series.keys;
 
-  /// Up to four consecutive samples of [driver] around [t] for smooth
-  /// interpolation: the pair bracketing [t] (at [SampleWindow.bracket] and
-  /// the next index), plus the neighbour either side when no gap separates
-  /// it. Null when no pair brackets [t] without a gap.
-  SampleWindow? windowAt(int driver, double t) => _series[driver]?.window(t);
+  /// Consecutive samples of [driver] around [t]: the pair bracketing [t]
+  /// (at [SampleWindow.bracket] and the next index), the neighbour either
+  /// side, and any more within [reach] seconds of [t], none across a gap.
+  /// Null when no pair brackets [t] without a gap.
+  SampleWindow? windowAt(int driver, double t, {double reach = 0}) =>
+      _series[driver]?.window(t, reach);
 
   /// Interpolated raw position of [driver] at [t], or null without data.
   (double, double)? positionAt(int driver, double t) => _series[driver]?.at(t);
@@ -121,15 +122,24 @@ class _Series {
     return (x[i - 1] + (x[i] - x[i - 1]) * f, y[i - 1] + (y[i] - y[i - 1]) * f);
   }
 
-  SampleWindow? window(double time) {
+  SampleWindow? window(double time, double reach) {
     final i = _lowerBound(time);
     // a: last sample at or before [time].
     final a = (i < t.length && t[i] == time) ? i : i - 1;
     if (a < 0 || a + 1 >= t.length) return null;
-    if (t[a + 1] - t[a] > LocationTimeline.maxGap) return null;
+    const maxGap = LocationTimeline.maxGap;
+    if (t[a + 1] - t[a] > maxGap) return null;
     var from = a, to = a + 1;
-    if (from > 0 && t[from] - t[from - 1] <= LocationTimeline.maxGap) from--;
-    if (to + 1 < t.length && t[to + 1] - t[to] <= LocationTimeline.maxGap) to++;
+    while (from > 0 &&
+        t[from] - t[from - 1] <= maxGap &&
+        (from == a || t[from - 1] >= time - reach)) {
+      from--;
+    }
+    while (to + 1 < t.length &&
+        t[to + 1] - t[to] <= maxGap &&
+        (to == a + 1 || t[to + 1] <= time + reach)) {
+      to++;
+    }
     return SampleWindow(
       t.sublist(from, to + 1),
       x.sublist(from, to + 1),

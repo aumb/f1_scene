@@ -14,15 +14,20 @@ class LocationBatch {
   final samples = <int, ({List<double> t, List<double> x, List<double> y})>{};
 
   void add(int driver, double t, double x, double y) {
-    final series = samples.putIfAbsent(
-      driver,
-      () => (t: <double>[], x: <double>[], y: <double>[]),
+    final series = samples[driver] ??= (
+      t: <double>[],
+      x: <double>[],
+      y: <double>[],
     );
     series.t.add(t);
     series.x.add(x);
     series.y.add(y);
   }
 }
+
+/// Lets the event loop run, so a frame can be drawn, before continuing a
+/// long piece of work.
+Future<void> yieldToFrames() => Future<void>.delayed(Duration.zero);
 
 /// Fetches and parses race data from OpenF1, memoizing per-session lookups.
 class RaceRepository {
@@ -223,7 +228,11 @@ class RaceRepository {
     });
     final batch = LocationBatch(epoch);
     final origin = epoch.microsecondsSinceEpoch / 1e6;
-    for (final r in rows) {
+    for (var i = 0; i < rows.length; i++) {
+      // A chunk is ~25k rows, read on the thread that draws frames; let a
+      // frame through every few thousand rather than stall playback.
+      if (i > 0 && i % _rowsPerSlice == 0) await yieldToFrames();
+      final r = rows[i];
       batch.add(
         r['driver_number'] as int,
         isoSeconds(r['date'] as String) - origin,
@@ -233,6 +242,8 @@ class RaceRepository {
     }
     return batch;
   }
+
+  static const _rowsPerSlice = 4000;
 
   /// Seconds since the Unix epoch of an OpenF1 timestamp such as
   /// `2024-03-02T15:20:00.138000+00:00`.

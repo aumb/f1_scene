@@ -63,11 +63,23 @@ tool/         Data vendoring and alignment check scripts
   tool/check_alignment.dart 2024`). Positions stream in 5-minute chunks around
   the playhead, within OpenF1's free rate limits, and playback waits while a
   chunk loads.
-- **Car motion.** Each position sample is expressed along the circuit (or the
-  pit lane) and interpolated there with a monotone Hermite curve, so cars
-  follow corners instead of cutting the chords between samples ~20 m apart,
-  keep a steady speed, and stay inside the track edges despite alignment
-  error. The pit lane is traced from one typical pit stop's positions.
+- **Car motion.** OpenF1 stamps each batch of positions with when it
+  arrived, up to ~0.1 s off when it was taken, and every car shares the
+  error; the median disagreement between each moving car and its own
+  smooth motion recovers it. Each sample is then expressed along the
+  circuit (or the pit lane) and the motion fitted there with a local
+  quadratic over ±1.3 s, so cars follow corners instead of cutting the
+  chords between samples ~20 m apart, hold a steady speed and stay inside
+  the track edges despite alignment error (`dart run tool/check_motion.dart
+  2024 azerbaijan` measures it). The pit lane is traced from one typical pit
+  stop's positions.
+- **Traffic.** OpenF1 puts every car on one shared line around the lap (cars
+  at the same spot differ by ~4 cm sideways), so the data never says who is
+  beside whom. Cars within reach of each other step apart across the track,
+  sooner the faster they close, always in the same order so none passes
+  through another, and back onto the line once clear. In the orbit view,
+  where cars are drawn enlarged, each shrinks toward real size as another
+  comes close, so a battle never merges into one blob.
 - **Timing.** The tower and driver card replay OpenF1's positions, intervals,
   stints and lap/sector times at the playhead; sectors are rated purple
   (fastest of anyone), green (personal best) or yellow against the bests set
@@ -83,7 +95,10 @@ tool/         Data vendoring and alignment check scripts
 - **Cars and cameras.** The car is a low-poly 2026-proportioned model built
   in code (body in the team colour). Besides the orbit view, a chase camera
   turns with the followed car, and a TV mode cuts between trackside posts on
-  the outside of corners, zooming to keep the car framed.
+  the outside of corners, zooming to keep the car framed. With scenery, each
+  post is placed where sight lines to the approach it films clear the
+  buildings and terrain, and the camera only cuts to posts that can see the
+  car.
 
 ## Controls
 
