@@ -1,0 +1,225 @@
+{
+  "sources": {
+    "bacinger/f1-circuits": "394d8fbe70ef2c0b0c8d23ff7bee61fa09606055",
+    "Makakashan/F1TrackViewer": "2bb6c9f7019f63c933bad124705053b7984a4a13"
+  },
+  "circuits": [
+    {
+      "id": "bh-2002",
+      "name": "Bahrain International Circuit",
+      "shortName": "Bahrain",
+      "country": "Bahrain",
+      "hasWidth": true
+    },
+    {
+      "id": "az-2016",
+      "name": "Baku City Circuit",
+      "shortName": "Baku",
+      "country": "Azerbaijan",
+      "hasWidth": false
+    },
+    {
+      "id": "es-1991",
+      "name": "Circuit de Barcelona-Catalunya",
+      "shortName": "Barcelona",
+      "country": "Spain",
+      "hasWidth": true
+    },
+    {
+      "id": "us-2012",
+      "name": "Circuit of The Americas",
+      "shortName": "COTA",
+      "country": "United States",
+      "hasWidth": true
+    },
+    {
+      "id": "de-1932",
+      "name": "Hockenheimring",
+      "shortName": "Hockenheim",
+      "country": "Germany",
+      "hasWidth": true
+    },
+    {
+      "id": "hu-1986",
+      "name": "Hungaroring",
+      "shortName": "Hungaroring",
+      "country": "Hungary",
+      "hasWidth": true
+    },
+    {
+      "id": "it-1953",
+      "name": "Autodromo Internazionale Enzo e Dino Ferrari",
+      "shortName": "Imola",
+      "country": "Italy",
+      "hasWidth": false
+    },
+    {
+      "id": "br-1940",
+      "name": "Autodromo Jose Carlos Pace",
+      "shortName": "Interlagos",
+      "country": "Brazil",
+      "hasWidth": true
+    },
+    {
+      "id": "tr-2005",
+      "name": "Istanbul Park",
+      "shortName": "Istanbul",
+      "country": "Turkey",
+      "hasWidth": false
+    },
+    {
+      "id": "sa-2021",
+      "name": "Jeddah Corniche Circuit",
+      "shortName": "Jeddah",
+      "country": "Saudi Arabia",
+      "hasWidth": false
+    },
+    {
+      "id": "us-2023",
+      "name": "Las Vegas Strip Circuit",
+      "shortName": "Las Vegas",
+      "country": "United States",
+      "hasWidth": false
+    },
+    {
+      "id": "qa-2004",
+      "name": "Lusail International Circuit",
+      "shortName": "Lusail",
+      "country": "Qatar",
+      "hasWidth": false
+    },
+    {
+      "id": "au-1953",
+      "name": "Albert Park Circuit",
+      "shortName": "Melbourne",
+      "country": "Australia",
+      "hasWidth": true
+    },
+    {
+      "id": "mx-1962",
+      "name": "Autodromo Hermanos Rodriguez",
+      "shortName": "Mexico City",
+      "country": "Mexico",
+      "hasWidth": true
+    },
+    {
+      "id": "us-2022",
+      "name": "Miami International Autodrome",
+      "shortName": "Miami",
+      "country": "United States",
+      "hasWidth": false
+    },
+    {
+      "id": "mc-1929",
+      "name": "Circuit de Monaco",
+      "shortName": "Monaco",
+      "country": "Monaco",
+      "hasWidth": false
+    },
+    {
+      "id": "ca-1978",
+      "name": "Circuit Gilles Villeneuve",
+      "shortName": "Montreal",
+      "country": "Canada",
+      "hasWidth": true
+    },
+    {
+      "id": "it-1922",
+      "name": "Autodromo Nazionale Monza",
+      "shortName": "Monza",
+      "country": "Italy",
+      "hasWidth": true
+    },
+    {
+      "id": "it-1914",
+      "name": "Mugello Circuit",
+      "shortName": "Mugello",
+      "country": "Italy",
+      "hasWidth": false
+    },
+    {
+      "id": "de-1927",
+      "name": "Nurburgring",
+      "shortName": "Nurburgring",
+      "country": "Germany",
+      "hasWidth": true
+    },
+    {
+      "id": "fr-1969",
+      "name": "Circuit Paul Ricard",
+      "shortName": "Paul Ricard",
+      "country": "France",
+      "hasWidth": false
+    },
+    {
+      "id": "pt-2008",
+      "name": "Autodromo Internacional do Algarve",
+      "shortName": "Portimao",
+      "country": "Portugal",
+      "hasWidth": false
+    },
+    {
+      "id": "cn-2004",
+      "name": "Shanghai International Circuit",
+      "shortName": "Shanghai",
+      "country": "China",
+      "hasWidth": true
+    },
+    {
+      "id": "gb-1948",
+      "name": "Silverstone Circuit",
+      "shortName": "Silverstone",
+      "country": "United Kingdom",
+      "hasWidth": true
+    },
+    {
+      "id": "sg-2008",
+      "name": "Marina Bay Street Circuit",
+      "shortName": "Singapore",
+      "country": "Singapore",
+      "hasWidth": false
+    },
+    {
+      "id": "ru-2014",
+      "name": "Sochi Autodrom",
+      "shortName": "Sochi",
+      "country": "Russia",
+      "hasWidth": true
+    },
+    {
+      "id": "be-1925",
+      "name": "Circuit de Spa-Francorchamps",
+      "shortName": "Spa",
+      "country": "Belgium",
+      "hasWidth": true
+    },
+    {
+      "id": "at-1969",
+      "name": "Red Bull Ring",
+      "shortName": "Spielberg",
+      "country": "Austria",
+      "hasWidth": true
+    },
+    {
+      "id": "jp-1962",
+      "name": "Suzuka Circuit",
+      "shortName": "Suzuka",
+      "country": "Japan",
+      "hasWidth": true
+    },
+    {
+      "id": "ae-2009",
+      "name": "Yas Marina Circuit",
+      "shortName": "Yas Marina",
+      "country": "United Arab Emirates",
+      "hasWidth": true
+    },
+    {
+      "id": "nl-1948",
+      "name": "Circuit Zandvoort",
+      "shortName": "Zandvoort",
+      "country": "Netherlands",
+      "hasWidth": true
+    }
+  ]
+}
