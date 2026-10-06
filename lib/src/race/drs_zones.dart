@@ -1,6 +1,7 @@
 import '../geometry/track_alignment.dart';
 import '../geometry/track_projector.dart';
-import 'race_repository.dart';
+import 'location_batch.dart';
+import 'location_timeline.dart';
 
 /// A stretch of track, in stations along the circuit. [start] is greater
 /// than [end] when the stretch crosses the start/finish seam.
@@ -27,8 +28,6 @@ List<TrackSpan> drsZonesFrom({
   required LocationBatch locations,
   required SimilarityTransform2D transform,
   required TrackProjector track,
-  double minLength = 100,
-  double splitGap = 50,
 }) {
   final along = <double>[];
   for (final MapEntry(key: driver, value: times) in openTimes.entries) {
@@ -39,7 +38,7 @@ List<TrackSpan> drsZonesFrom({
       final i = _upperBound(s.t, t);
       if (i == 0 || i == s.t.length) continue;
       final t0 = s.t[i - 1], t1 = s.t[i];
-      if (t1 - t0 > 4) continue;
+      if (t1 - t0 > LocationTimeline.maxGap) continue;
       final f = (t - t0) / (t1 - t0);
       final (x, z) = transform.apply(
         s.x[i - 1] + (s.x[i] - s.x[i - 1]) * f,
@@ -50,10 +49,10 @@ List<TrackSpan> drsZonesFrom({
       along.add(p.along);
     }
   }
-  if (along.length < 5) return const [];
+  if (along.length < _minPoints) return const [];
 
   final n = track.stations.length.toDouble();
-  final gap = splitGap / track.metersPerStation;
+  final gap = _splitGap / track.metersPerStation;
   along.sort();
   final clusters = <List<double>>[
     [along.first],
@@ -75,9 +74,19 @@ List<TrackSpan> drsZonesFrom({
       ((span.end - span.start) % n) * track.metersPerStation;
   return [
     for (final (span, count) in spans)
-      if (count >= 3 && length(span) >= minLength) span,
+      if (count >= _minClusterPoints && length(span) >= _minLength) span,
   ];
 }
+
+/// Open moments needed to say anything; fewer is noise.
+const _minPoints = 5;
+
+/// Open moments a zone needs, and its shortest length in meters.
+const _minClusterPoints = 3;
+const double _minLength = 100;
+
+/// Meters without an open moment that split one zone from the next.
+const double _splitGap = 50;
 
 int _upperBound(List<double> values, double v) {
   var lo = 0, hi = values.length;

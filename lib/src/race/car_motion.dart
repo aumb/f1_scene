@@ -4,6 +4,7 @@ import 'package:vector_math/vector_math.dart';
 
 import '../geometry/track_alignment.dart';
 import '../geometry/track_projector.dart';
+import 'local_fit.dart';
 import 'location_timeline.dart';
 
 /// Where a car is at some moment, in scene space.
@@ -64,9 +65,25 @@ class CarMotion {
   /// Half a car's width; it stays this far inside the edges.
   static const double carHalfWidth = 1.0;
 
-  /// Speed, m/s, below which sideways motion yaws a car no more than it
-  /// would at this speed.
-  static const double minYawSpeed = 15;
+  /// How far a car turns, in radians, for moving sideways at [sideways] m/s
+  /// while driving at [speed] m/s: to point where it is going. Capped, so
+  /// noise never twitches a car, and gentle at walking pace, where any
+  /// sideways drift would swing it round; none at all below
+  /// [_minTurnSpeed].
+  static double yawFor(double sideways, double speed) {
+    if (speed <= _minTurnSpeed) return 0;
+    return math
+        .atan2(sideways, math.max(speed, _gentleBelow))
+        .clamp(-_maxYaw, _maxYaw);
+  }
+
+  /// Speeds, m/s, below which a car doesn't turn into sideways motion at
+  /// all, and below which it turns as little as it would at that speed.
+  static const double _minTurnSpeed = 2, _gentleBelow = 15;
+
+  /// The most a car turns into sideways motion: about 17°, a sharp lane
+  /// change.
+  static const double _maxYaw = 0.3;
 
   /// A car this far beyond the track edge may be in the pit lane...
   static const double _pitMinOffTrack = 2.0;
@@ -78,19 +95,19 @@ class CarMotion {
   /// Half-width, in seconds, of the window of samples each pose is fitted
   /// to: ~10 samples, enough to average out timing noise while following
   /// full braking.
-  static const double smoothing = 1.3;
+  static const double fitHalfWidth = 1.3;
 
   final _trackHints = <int, int>{};
 
-  /// Each driver's recently located samples by time. Playback walks forward
-  /// a sample or two per frame, so a few windows' worth covers it; locating a
-  /// sample once also keeps its place fixed instead of shifting with the
-  /// projection hint from frame to frame.
+  /// Each driver's recently located samples by time. Playback moves on at
+  /// most a few samples per frame, even at 64x, so a few windows' worth
+  /// covers it; locating a sample once also keeps its place fixed instead of
+  /// shifting with the projection hint from frame to frame.
   final _located = <int, Map<double, _Located>>{};
   static const _cacheSize = 32;
 
   /// The pose of [driver] at [t] from its samples [window], or null. The
-  /// window should reach [smoothing] seconds either side of [t].
+  /// window should reach [fitHalfWidth] seconds either side of [t].
   CarPose? pose(int driver, SampleWindow? window, double t) {
     if (window == null) return null;
     final cache = _located.putIfAbsent(driver, () => <double, _Located>{});
@@ -106,8 +123,7 @@ class CarMotion {
     _trackHints[driver] = sa.track.station;
 
     if (sa.onPit != sb.onPit) {
-      final dt = window.t[b] - window.t[a];
-      return _blend(sa, sb, dt > 0 ? ((t - window.t[a]) / dt).clamp(0, 1) : 0);
+      return _blend(sa, sb, window.t[a], window.t[b], t);
     }
     final onPit = sa.onPit;
     final projector = onPit ? pitLane! : track;
@@ -141,13 +157,13 @@ class CarMotion {
     // interpolating curve turns into surges of several g between samples.
     // Wide enough to always weigh the bracketing pair, across a gap too.
     final reach = math.max(
-      smoothing,
+      fitHalfWidth,
       1.2 * math.max(t - window.t[a], window.t[b] - t),
     );
-    final alongFit = _Fit(), lateralFit = _Fit();
+    final alongFit = LocalFit(), lateralFit = LocalFit();
     for (var i = first; i <= last; i++) {
       final u = window.t[i] - t;
-      final w = _tricube(u / reach);
+      final w = tricube(u / reach);
       if (w == 0) continue;
       alongFit.add(u, along(samples[i]), w);
       lateralFit.add(u, pointOf(samples[i]).lateral, w);
@@ -163,18 +179,10 @@ class CarMotion {
     final placed = projector.place(position, lateral);
 
     final forward = placed.forward;
-    var heading = math.atan2(forward.x, forward.z);
     final speed = velocity * projector.metersPerStation;
-    if (speed > 2) {
-      // Yaw into a lane change, capped so noise never twitches a car, and
-      // gentle at walking pace, where any sideways drift would swing it.
-      heading += math
-          .atan2(lateralVelocity, math.max(speed, minYawSpeed))
-          .clamp(-0.3, 0.3);
-    }
     return CarPose(
       placed.position,
-      heading,
+      math.atan2(forward.x, forward.z) + yawFor(lateralVelocity, speed),
       pitch: math.asin(forward.y.clamp(-1.0, 1.0)),
       inPit: onPit,
       along: onPit ? null : position % n,
@@ -183,15 +191,21 @@ class CarMotion {
     );
   }
 
-  /// Crossing between track and pit lane: straight-line blend of the two
-  /// samples, at the track's height.
-  CarPose _blend(_Located a, _Located b, double f) {
-    final x = a.x + (b.x - a.x) * f, z = a.z + (b.z - a.z) * f;
-    final y = track.place(a.track.along, 0).position.y;
+  /// Crossing between track and pit lane at [t]: a straight line from
+  /// sample [a] at [ta] to [b] at [tb], at the track's height.
+  CarPose _blend(_Located a, _Located b, double ta, double tb, double t) {
+    final dx = b.x - a.x, dz = b.z - a.z;
+    final dt = tb - ta;
+    final f = dt > 0 ? ((t - ta) / dt).clamp(0.0, 1.0) : 0.0;
     return CarPose(
-      Vector3(x, y, z),
-      math.atan2(b.x - a.x, b.z - a.z),
+      Vector3(
+        a.x + dx * f,
+        track.place(a.track.along, 0).position.y,
+        a.z + dz * f,
+      ),
+      math.atan2(dx, dz),
       inPit: true,
+      speed: dt > 0 ? math.sqrt(dx * dx + dz * dz) / dt : 0,
     );
   }
 
@@ -237,62 +251,4 @@ class _Located {
   final PathPoint? pit;
 
   bool get onPit => pit != null;
-}
-
-/// Weighted least-squares polynomial through (u, y) points, evaluated at
-/// u = 0: the level and slope there.
-class _Fit {
-  int _count = 0;
-  double _s0 = 0, _s1 = 0, _s2 = 0, _s3 = 0, _s4 = 0;
-  double _t0 = 0, _t1 = 0, _t2 = 0;
-
-  void add(double u, double y, double w) {
-    final u2 = u * u;
-    _count++;
-    _s0 += w;
-    _s1 += w * u;
-    _s2 += w * u2;
-    _s3 += w * u2 * u;
-    _s4 += w * u2 * u2;
-    _t0 += w * y;
-    _t1 += w * u * y;
-    _t2 += w * u2 * y;
-  }
-
-  (double, double) linear() {
-    final det = _s0 * _s2 - _s1 * _s1;
-    if (_count < 2 || det.abs() < 1e-12) return (_t0 / _s0, 0);
-    final slope = (_s0 * _t1 - _s1 * _t0) / det;
-    return ((_t0 - slope * _s1) / _s0, slope);
-  }
-
-  /// A parabola, which follows braking and acceleration without the lag a
-  /// line would add; a line with too few points to fit one.
-  (double, double) quadratic() {
-    if (_count < 4) return linear();
-    // Cramer's rule on the 3x3 normal equations.
-    double det3(
-      double a,
-      double b,
-      double c,
-      double d,
-      double e,
-      double f,
-      double g,
-      double h,
-      double i,
-    ) => a * (e * i - f * h) - b * (d * i - f * g) + c * (d * h - e * g);
-    final det = det3(_s0, _s1, _s2, _s1, _s2, _s3, _s2, _s3, _s4);
-    if (det.abs() < 1e-12) return linear();
-    final level = det3(_t0, _s1, _s2, _t1, _s2, _s3, _t2, _s3, _s4) / det;
-    final slope = det3(_s0, _t0, _s2, _s1, _t1, _s3, _s2, _t2, _s4) / det;
-    return (level, slope);
-  }
-}
-
-double _tricube(double u) {
-  final a = u.abs();
-  if (a >= 1) return 0;
-  final b = 1 - a * a * a;
-  return b * b * b;
 }

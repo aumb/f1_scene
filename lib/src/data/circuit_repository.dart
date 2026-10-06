@@ -20,10 +20,7 @@ class CircuitRepository {
     ];
   }
 
-  Future<Circuit> load(
-    CircuitSummary summary, {
-    double elevationScale = 1.0,
-  }) async {
+  Future<Circuit> load(CircuitSummary summary) async {
     final id = summary.id;
     final results = await Future.wait([
       _json('$_root/layouts/$id.geojson'),
@@ -37,7 +34,6 @@ class CircuitRepository {
       elevation: results[1],
       markers: results[2],
       width: summary.hasWidthProfile ? results[3] : null,
-      elevationScale: elevationScale,
     );
   }
 

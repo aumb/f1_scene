@@ -12,6 +12,7 @@ import 'location_timeline.dart';
 import 'pit_lane_tracer.dart';
 import 'race_models.dart';
 import 'race_repository.dart';
+import 'session_alignment.dart';
 import 'stamp_jitter.dart';
 import 'timing_board.dart';
 import 'traffic.dart';
@@ -40,7 +41,7 @@ class RaceReplay extends ChangeNotifier {
          start: math.min(0.0, raceStart - _preRoll),
          end: end,
        ) {
-    time.value = raceStart - 15;
+    time.value = raceStart - _lead;
     _updateStandings();
   }
 
@@ -64,79 +65,32 @@ class RaceReplay extends ChangeNotifier {
       throw StateError('OpenF1 has no timing for ${session.meetingName}');
     }
 
-    double since(DateTime t) =>
-        t.difference(session.start).inMicroseconds / 1e6;
-
-    // The earliest start of each lap number is the leader starting it.
-    final lapStarts = <int, double>{};
-    var lastFinish = 0.0;
-    for (final lap in laps) {
-      final start = lap.start;
-      if (start == null) continue;
-      final t = since(start);
-      lapStarts.update(lap.lapNumber, (v) => math.min(v, t), ifAbsent: () => t);
-      lastFinish = math.max(lastFinish, t + (lap.duration ?? 0));
-    }
-    final lapCount = lapStarts.keys.reduce(math.max);
-    final leaderLapStarts = [
-      for (var n = 1; n <= lapCount; n++) lapStarts[n] ?? double.infinity,
-    ];
-
-    // Fit OpenF1's frame to the scene from one clean racing lap.
-    final reference = _referenceLap(laps);
-    final batch = await repository.locations(
-      session.sessionKey,
-      epoch: session.start,
-      from: reference.start!,
-      to: reference.start!.add(
-        Duration(milliseconds: (reference.duration! * 1000).round() + 500),
-      ),
-      driver: reference.driverNumber,
-    );
-    final samples = batch.samples[reference.driverNumber];
-    if (samples == null || samples.t.length < 50) {
-      throw StateError('Not enough position data to align the circuit');
-    }
-    final alignment = alignToPath(
-      source: [
-        for (var i = 0; i < samples.t.length; i++) (samples.x[i], samples.y[i]),
-      ],
-      target: [for (final c in stations.center) (c.x, c.z)],
+    final (leaderLapStarts, lastFinish) = _lapTimeline(session, laps);
+    final alignment = await alignToLap(
+      repository: repository,
+      session: session,
+      lap: referenceLap(laps),
+      stations: stations,
     );
     debugPrint(
       'Aligned ${session.meetingName} ${session.year}: '
       '${alignment.transform}, rms ${alignment.rmsError.toStringAsFixed(1)} m',
     );
-
     final track = TrackProjector(stations);
-    TrackStations? pitLane;
-    try {
-      pitLane = await tracePitLane(
-        repository: repository,
-        session: session,
-        stops: pitStops,
-        transform: alignment.transform,
-        track: track,
-      );
-    } catch (e) {
-      // The pit lane is a nicety; never fail the replay over it.
-      debugPrint('No pit lane: $e');
-    }
-
-    // Lead the camera with whoever led after lap 1.
-    final lap2 = laps.where((l) => l.lapNumber == 2 && l.start != null);
-    final featured = lap2.isEmpty
-        ? drivers.first.number
-        : lap2
-              .reduce((a, b) => a.start!.isBefore(b.start!) ? a : b)
-              .driverNumber;
+    final pitLane = await _pitLaneOrNull(
+      repository,
+      session,
+      pitStops,
+      alignment.transform,
+      track,
+    );
 
     final replay = RaceReplay._(
       session: session,
       drivers: drivers,
       alignment: alignment,
       pitLane: pitLane,
-      featuredDriver: featured,
+      featuredDriver: _featuredDriver(laps, drivers),
       timing: TimingBoard(
         epoch: session.start,
         drivers: drivers,
@@ -159,26 +113,71 @@ class RaceReplay extends ChangeNotifier {
     return replay;
   }
 
-  /// A representative lap: early in the race, not out of the pits, and
-  /// near the median lap time (no safety car or incident).
-  static RaceLap _referenceLap(List<RaceLap> laps) {
-    final timed = laps
-        .where(
-          (l) =>
-              l.start != null &&
-              l.duration != null &&
-              !l.isPitOutLap &&
-              l.lapNumber > 2,
-        )
-        .toList();
-    if (timed.isEmpty) throw StateError('No timed laps to align with');
-    final durations = timed.map((l) => l.duration!).toList()..sort();
-    final median = durations[durations.length ~/ 2];
-    return timed.firstWhere(
-      (l) => l.duration! < median * 1.05,
-      orElse: () => timed.first,
+  /// When the leader started each lap (lap n at index n - 1), and when the
+  /// last car finished, in seconds since the session start.
+  static (List<double>, double) _lapTimeline(
+    RaceSession session,
+    List<RaceLap> laps,
+  ) {
+    // The earliest start of each lap number is the leader starting it.
+    final lapStarts = <int, double>{};
+    var lastFinish = 0.0;
+    for (final lap in laps) {
+      final start = lap.start;
+      if (start == null) continue;
+      final t = session.secondsAt(start);
+      lapStarts.update(lap.lapNumber, (v) => math.min(v, t), ifAbsent: () => t);
+      lastFinish = math.max(lastFinish, t + (lap.duration ?? 0));
+    }
+    if (lapStarts[1] == null) {
+      throw StateError('OpenF1 has no start time for lap 1');
+    }
+    final lapCount = lapStarts.keys.reduce(math.max);
+    return (
+      [for (var n = 1; n <= lapCount; n++) lapStarts[n] ?? double.infinity],
+      lastFinish,
     );
   }
+
+  /// The pit lane traced from a stop, or null when none could be. It is a
+  /// nicety; the replay never fails over it.
+  static Future<TrackStations?> _pitLaneOrNull(
+    RaceRepository repository,
+    RaceSession session,
+    List<RacePitStop> stops,
+    SimilarityTransform2D transform,
+    TrackProjector track,
+  ) async {
+    try {
+      return await tracePitLane(
+        repository: repository,
+        session: session,
+        stops: stops,
+        transform: transform,
+        track: track,
+      );
+    } catch (e) {
+      debugPrint('No pit lane: $e');
+      return null;
+    }
+  }
+
+  /// Whoever led after lap 1, to follow by default.
+  static int _featuredDriver(List<RaceLap> laps, List<RaceDriver> drivers) {
+    final lap2 = laps.where((l) => l.lapNumber == 2 && l.start != null);
+    return lap2.isEmpty
+        ? drivers.first.number
+        : lap2
+              .reduce((a, b) => a.start!.isBefore(b.start!) ? a : b)
+              .driverNumber;
+  }
+
+  /// Seconds before lights out where playback starts.
+  static const double _lead = 15;
+
+  /// Playback speed from which two chunks ahead are fetched rather than
+  /// one (a 5-minute chunk lasts under 20 s at 16x).
+  static const double _fastSpeed = 16;
 
   /// How much of the formation lap to show before lights out.
   static const double _preRoll = 300;
@@ -187,7 +186,7 @@ class RaceReplay extends ChangeNotifier {
   final List<RaceDriver> drivers;
   final AlignmentResult alignment;
 
-  /// Traced from a pit stop; null when the race had none.
+  /// Traced from a pit stop; null when no usable stop could be traced.
   final TrackStations? pitLane;
 
   /// Who to follow by default: the leader after lap 1.
@@ -199,8 +198,9 @@ class RaceReplay extends ChangeNotifier {
   /// The running order at the playhead, refreshed a few times a second.
   final standings = ValueNotifier<List<TowerRow>>(const []);
 
-  /// DRS zones, derived from car data once playback is ready; empty until
-  /// then, and for seasons without DRS.
+  /// DRS zones, derived from four minutes of mid-race car data fetched in
+  /// the background after [load]; empty until then, if that fails, and for
+  /// seasons without DRS.
   final drsZones = ValueNotifier<List<TrackSpan>>(const []);
 
   /// Car poses at the playhead, updated every [tick].
@@ -264,13 +264,15 @@ class RaceReplay extends ChangeNotifier {
   void seek(double t) {
     time.value = t.clamp(timeline.start, timeline.end);
     _requestChunks();
+    // Pose first: the standings flag the cars in the pit lane.
+    _currentPoses = _computePoses();
     _updateStandings();
   }
 
   /// Advances playback by [dt] wall-clock seconds and poses the cars.
   void tick(double dt) {
     _advance(dt);
-    _currentPoses = poses();
+    _currentPoses = _computePoses();
     _sinceStandings += dt;
     if (_sinceStandings >= 0.25) _updateStandings();
   }
@@ -308,9 +310,7 @@ class RaceReplay extends ChangeNotifier {
   Future<void> _loadDrsZones(TrackProjector track) async {
     // 15 minutes in: DRS is enabled after two laps, and an early safety car
     // is usually over.
-    final from = session.start.add(
-      Duration(milliseconds: ((raceStart + 900) * 1000).round()),
-    );
+    final from = session.timeAt(raceStart + 900);
     final to = from.add(const Duration(minutes: 4));
     try {
       final (open, locations) = await (
@@ -342,7 +342,7 @@ class RaceReplay extends ChangeNotifier {
 
   /// Every driver with data at the playhead, in scene space, side by side
   /// where the data has them in the same spot.
-  Map<int, CarPose> poses() {
+  Map<int, CarPose> _computePoses() {
     final t = time.value;
     return _traffic.separate({
       for (final d in drivers) d.number: ?_poseOf(d.number, t),
@@ -355,7 +355,7 @@ class RaceReplay extends ChangeNotifier {
     try {
       return _motion.pose(
         driver,
-        timeline.windowAt(driver, t, reach: CarMotion.smoothing),
+        timeline.windowAt(driver, t, reach: CarMotion.fitHalfWidth),
         t,
       );
     } catch (e) {
@@ -368,7 +368,7 @@ class RaceReplay extends ChangeNotifier {
   final _failedDrivers = <int>{};
 
   void _requestChunks() {
-    final ahead = _speed >= 16 ? 2 : 1;
+    final ahead = _speed >= _fastSpeed ? 2 : 1;
     for (final chunk in timeline.wanted(time.value, ahead: ahead)) {
       final retry = _retryAfter[chunk];
       if (retry != null && DateTime.now().isBefore(retry)) continue;
@@ -379,14 +379,12 @@ class RaceReplay extends ChangeNotifier {
   Future<void> _loadChunk(int chunk) async {
     timeline.markLoading(chunk);
     final (from, to) = timeline.chunkRange(chunk);
-    DateTime at(double t) =>
-        session.start.add(Duration(microseconds: (t * 1e6).round()));
     try {
       final batch = await _repository.locations(
         session.sessionKey,
         epoch: session.start,
-        from: at(from),
-        to: at(to),
+        from: session.timeAt(from),
+        to: session.timeAt(to),
       );
       if (_disposed) return;
       final corrected = await correctStampJitter(batch);

@@ -2,7 +2,7 @@ import 'package:f1_scene/src/geometry/track_alignment.dart';
 import 'package:f1_scene/src/geometry/track_mesh.dart';
 import 'package:f1_scene/src/geometry/track_projector.dart';
 import 'package:f1_scene/src/race/drs_zones.dart';
-import 'package:f1_scene/src/race/race_repository.dart';
+import 'package:f1_scene/src/race/location_batch.dart';
 import 'package:flutter_test/flutter_test.dart';
 
 import '../support/circuits.dart';

@@ -59,16 +59,13 @@ class Circuit {
   });
 
   /// Builds a circuit from the vendored JSON documents of one circuit folder.
-  ///
-  /// [elevationScale] multiplies heights relative to the mean elevation, so
-  /// gentle circuits can be exaggerated for a diorama look.
+  /// Heights are relative to the circuit's mean elevation, in true scale.
   factory Circuit.fromJson({
     required CircuitSummary summary,
     required Map<String, dynamic> layout,
     required Map<String, dynamic> elevation,
     required Map<String, dynamic> markers,
     Map<String, dynamic>? width,
-    double elevationScale = 1.0,
   }) {
     final feature = (layout['features'] as List).first as Map<String, dynamic>;
     final lonLat = [
@@ -94,11 +91,7 @@ class Circuit {
     final mean = heights.take(count).reduce((a, b) => a + b) / count;
     final points = [
       for (var i = 0; i < count; i++)
-        projection.project(
-          lonLat[i].$1,
-          lonLat[i].$2,
-          (heights[i] - mean) * elevationScale,
-        ),
+        projection.project(lonLat[i].$1, lonLat[i].$2, heights[i] - mean),
     ];
     final ys = points.map((p) => p.y);
 

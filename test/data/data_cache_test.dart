@@ -6,6 +6,7 @@ import 'package:f1_scene/src/data/data_cache.dart';
 import 'package:f1_scene/src/data/device_store.dart';
 import 'package:f1_scene/src/data/device_store_io.dart';
 import 'package:f1_scene/src/race/openf1_client.dart';
+import 'package:f1_scene/src/race/location_batch.dart';
 import 'package:f1_scene/src/race/race_repository.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:http/http.dart' as http;
@@ -109,7 +110,11 @@ void main() {
     setUp(() => sent = []);
 
     test('ask once, however often or at once they are asked for', () async {
-      final client = OpenF1Client(httpClient: api(), cache: DataCache());
+      final client = OpenF1Client(
+        httpClient: api(),
+        cache: DataCache(),
+        rateLimits: const [],
+      );
       await client.get('drivers', {'session_key': 9});
       await client.get('drivers', {'session_key': 9});
       await Future.wait([
@@ -130,6 +135,7 @@ void main() {
           client: OpenF1Client(
             httpClient: api(raceEnd: DateTime.utc(2024, 3, 2, 17)),
             cache: DataCache(store: store),
+            rateLimits: const [],
           ),
         );
         await repository.races(2024);
@@ -164,6 +170,7 @@ void main() {
         client: OpenF1Client(
           httpClient: api(raceEnd: DateTime.now().toUtc()),
           cache: DataCache(store: store),
+          rateLimits: const [],
         ),
       );
       await repository.races(DateTime.now().year);

@@ -1,7 +1,8 @@
 import 'dart:math' as math;
 import 'dart:typed_data';
 
-import 'race_repository.dart';
+import 'local_fit.dart';
+import 'location_batch.dart';
 
 /// Removes the timing jitter OpenF1 position samples share.
 ///
@@ -16,9 +17,10 @@ import 'race_repository.dart';
 /// really sampled later. Each stamp moves by the median such estimate over
 /// the cars moving at speed, which agree with each other to ~10 ms.
 Future<LocationBatch> correctStampJitter(LocationBatch batch) async {
-  // This runs as each chunk of ~23k samples arrives, on the thread that
+  // This runs as each chunk of ~22k samples arrives, on the thread that
   // draws frames, so it works on flat arrays indexed by stamp rather than
   // maps keyed by time, and lets a frame through between passes.
+  // A car needs a few samples for its own motion to be fitted at all.
   final cars = batch.samples.values.where((s) => s.t.length >= 5).toList();
   if (cars.length < _minCars) return batch;
 
@@ -49,27 +51,29 @@ Future<LocationBatch> correctStampJitter(LocationBatch batch) async {
         times[i] = corrected[car.stamp[i]];
       }
       _estimate(car, times, (k, e) {
-        estimates[k * cars.length + counts[k]++] = e;
+        // At most one estimate per car per stamp, so the slab can't overflow.
+        if (counts[k] < cars.length) {
+          estimates[k * cars.length + counts[k]++] = e;
+        }
       });
     }
-    var previous = double.negativeInfinity;
     for (var k = 0; k < m; k++) {
-      var c = corrected[k];
       final count = counts[k];
-      if (count >= _minCars) {
-        for (var j = 0; j < count; j++) {
-          scratch[j] = estimates[k * cars.length + j];
-        }
-        c = (c + _median(scratch, count)).clamp(
-          stamps[k] - _maxCorrection,
-          stamps[k] + _maxCorrection,
-        );
-        changed = true;
+      if (count < _minCars) continue;
+      for (var j = 0; j < count; j++) {
+        scratch[j] = estimates[k * cars.length + j];
       }
-      // Kept in order, so every car's samples stay sorted.
-      c = math.max(c, previous + _minSpacing);
-      corrected[k] = c;
-      previous = c;
+      // Each stamp stays within halfway to its neighbours, and the chunk's
+      // first and last never move outwards: every car's samples stay in
+      // order, within the chunk and against the chunks either side.
+      final lo = k == 0 ? stamps[k] : (stamps[k - 1] + stamps[k]) / 2 + _gap;
+      final hi = k == m - 1
+          ? stamps[k]
+          : (stamps[k] + stamps[k + 1]) / 2 - _gap;
+      corrected[k] = (corrected[k] + _median(scratch, count))
+          .clamp(stamps[k] - _maxCorrection, stamps[k] + _maxCorrection)
+          .clamp(lo, math.max(lo, hi));
+      changed = true;
     }
   }
   if (!changed) return batch;
@@ -164,15 +168,15 @@ const _minCars = 3;
 /// Corrections beyond this are not jitter; leave those stamps alone.
 const double _maxCorrection = 0.2;
 
-/// Corrected stamps stay at least this far apart, in seconds.
-const double _minSpacing = 0.01;
+/// Seconds kept clear between a corrected stamp and its neighbours' bounds.
+const double _gap = 1e-4;
 
 /// Only cars faster than this, in OpenF1 units (decimetres) per second,
 /// say anything about timing; a stationary car is where it is at any time.
 const double _minSpeed = 200;
 
-/// Half-width of the window each car's smooth motion is fitted over.
-const double _window = 1.0;
+/// Half-width, in seconds, of the window each car's motion is fitted over.
+const double _fitHalfWidth = 1.0;
 
 /// Reports, for each of [car]'s samples (by its stamp index), how much
 /// later than its time in [t] its batch was really taken, judging by this
@@ -184,42 +188,32 @@ void _estimate(
 ) {
   final n = car.stamp.length;
   final d = car.distance;
+  final fit = LocalFit();
   var lo = 0, hi = 0;
   for (var i = 0; i < n; i++) {
-    while (t[lo] < t[i] - _window) {
+    while (t[lo] < t[i] - _fitHalfWidth) {
       lo++;
     }
-    while (hi + 1 < n && t[hi + 1] <= t[i] + _window) {
+    while (hi + 1 < n && t[hi + 1] <= t[i] + _fitHalfWidth) {
       hi++;
     }
     // A fit from one side only would guess the motion, not measure it.
     if (i - lo < 2 || hi - i < 2) continue;
+    // A stamp this car already reported (a duplicate row) adds nothing.
+    if (i > 0 && car.stamp[i] == car.stamp[i - 1]) continue;
 
-    // Weighted least-squares line through the neighbours (not the sample
-    // itself), centred on this sample's time.
-    double sw = 0, sx = 0, sy = 0, sxx = 0, sxy = 0;
+    // A line through the neighbours (not the sample itself), centred on
+    // this sample's time.
+    fit.clear();
     for (var j = lo; j <= hi; j++) {
       if (j == i) continue;
       final u = t[j] - t[i];
-      final w = _tricube(u / _window);
-      sw += w;
-      sx += w * u;
-      sy += w * d[j];
-      sxx += w * u * u;
-      sxy += w * u * d[j];
+      fit.add(u, d[j], tricube(u / _fitHalfWidth));
     }
-    final det = sw * sxx - sx * sx;
-    if (det <= 1e-12) continue;
-    final speed = (sw * sxy - sx * sy) / det;
+    final line = fit.lineOrNull();
+    if (line == null) continue;
+    final (level, speed) = line;
     if (speed < _minSpeed) continue;
-    final level = (sy - speed * sx) / sw;
     report(car.stamp[i], (d[i] - level) / speed);
   }
-}
-
-double _tricube(double u) {
-  final a = u.abs();
-  if (a >= 1) return 0;
-  final b = 1 - a * a * a;
-  return b * b * b;
 }

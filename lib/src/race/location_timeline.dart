@@ -1,8 +1,8 @@
 import 'dart:math' as math;
 
-import 'race_repository.dart';
+import 'location_batch.dart';
 
-enum ChunkState { loading, loaded, failed }
+enum _ChunkState { loading, loaded, failed }
 
 /// Per-driver position history assembled from fixed-length time chunks.
 ///
@@ -23,8 +23,8 @@ class LocationTimeline {
   /// Two samples further apart than this bracket missing data, not motion.
   static const double maxGap = 4.0;
 
-  final _chunks = <int, ChunkState>{};
-  final _series = <int, _Series>{};
+  final _chunks = <int, _ChunkState>{};
+  final _series = <int, _DriverSamples>{};
 
   int get chunkCount => ((end - start) / chunkSeconds).ceil();
 
@@ -36,39 +36,42 @@ class LocationTimeline {
     math.min(end, start + (chunk + 1) * chunkSeconds),
   );
 
-  ChunkState? stateOf(int chunk) => _chunks[chunk];
-
   /// Whether data around [t] is loaded, including the next chunk when [t]
-  /// is close enough to its boundary for interpolation to need it.
+  /// is within [maxGap] of its end, where the samples bracketing [t] and
+  /// the motion fit around it may reach into it.
   bool isReady(double t) {
     final chunk = chunkAt(t);
-    if (_chunks[chunk] != ChunkState.loaded) return false;
+    if (_chunks[chunk] != _ChunkState.loaded) return false;
     final (_, chunkEnd) = chunkRange(chunk);
     return chunkEnd - t > maxGap ||
         chunk == chunkCount - 1 ||
-        _chunks[chunk + 1] == ChunkState.loaded;
+        _chunks[chunk + 1] == _ChunkState.loaded;
   }
 
-  /// Chunks to request for playback at [t]: the current one, then [ahead]
-  /// more in the direction of travel, skipping any loading or loaded.
-  List<int> wanted(double t, {int ahead = 1}) => [
-    for (
-      var k = chunkAt(t);
-      k <= math.min(chunkAt(t) + ahead, chunkCount - 1);
-      k++
-    )
-      if (_chunks[k] == null || _chunks[k] == ChunkState.failed) k,
-  ];
+  /// Chunks to request for playback at [t]: the current one and the next
+  /// [ahead], plus the previous one when [t] is within [maxGap] of its start
+  /// (just after a seek, the motion fit reaches back into it). Chunks loading
+  /// or loaded are left out.
+  List<int> wanted(double t, {int ahead = 1}) {
+    final current = chunkAt(t);
+    final (chunkStart, _) = chunkRange(current);
+    final first = t - chunkStart < maxGap ? math.max(0, current - 1) : current;
+    final last = math.min(current + ahead, chunkCount - 1);
+    return [
+      for (var k = first; k <= last; k++)
+        if (_chunks[k] == null || _chunks[k] == _ChunkState.failed) k,
+    ];
+  }
 
-  void markLoading(int chunk) => _chunks[chunk] = ChunkState.loading;
+  void markLoading(int chunk) => _chunks[chunk] = _ChunkState.loading;
 
-  void markFailed(int chunk) => _chunks[chunk] = ChunkState.failed;
+  void markFailed(int chunk) => _chunks[chunk] = _ChunkState.failed;
 
   void addChunk(int chunk, LocationBatch batch) {
     for (final MapEntry(key: driver, value: s) in batch.samples.entries) {
-      _series.putIfAbsent(driver, _Series.new).splice(s.t, s.x, s.y);
+      _series.putIfAbsent(driver, _DriverSamples.new).splice(s.t, s.x, s.y);
     }
-    _chunks[chunk] = ChunkState.loaded;
+    _chunks[chunk] = _ChunkState.loaded;
   }
 
   Iterable<int> get drivers => _series.keys;
@@ -79,9 +82,6 @@ class LocationTimeline {
   /// Null when no pair brackets [t] without a gap.
   SampleWindow? windowAt(int driver, double t, {double reach = 0}) =>
       _series[driver]?.window(t, reach);
-
-  /// Interpolated raw position of [driver] at [t], or null without data.
-  (double, double)? positionAt(int driver, double t) => _series[driver]?.at(t);
 }
 
 /// Consecutive raw samples; see [LocationTimeline.windowAt].
@@ -96,7 +96,8 @@ class SampleWindow {
   final int bracket;
 }
 
-class _Series {
+/// One driver's samples, sorted by time.
+class _DriverSamples {
   final t = <double>[];
   final x = <double>[];
   final y = <double>[];
@@ -110,16 +111,6 @@ class _Series {
     t.insertAll(at, order.map((i) => ts[i]));
     x.insertAll(at, order.map((i) => xs[i]));
     y.insertAll(at, order.map((i) => ys[i]));
-  }
-
-  (double, double)? at(double time) {
-    final i = _lowerBound(time);
-    if (i < t.length && t[i] == time) return (x[i], y[i]);
-    if (i == 0 || i == t.length) return null;
-    final t0 = t[i - 1], t1 = t[i];
-    if (t1 - t0 > LocationTimeline.maxGap) return null;
-    final f = (time - t0) / (t1 - t0);
-    return (x[i - 1] + (x[i] - x[i - 1]) * f, y[i - 1] + (y[i] - y[i - 1]) * f);
   }
 
   SampleWindow? window(double time, double reach) {

@@ -4,8 +4,6 @@ class RaceSession {
     required this.sessionKey,
     required this.meetingName,
     required this.circuitKey,
-    required this.circuitShortName,
-    required this.location,
     required this.year,
     required this.start,
     required this.end,
@@ -18,15 +16,21 @@ class RaceSession {
 
   /// OpenF1's stable circuit id, mapped to vendored layouts in `venues.dart`.
   final int circuitKey;
-  final String circuitShortName;
-  final String location;
   final int year;
 
-  /// Scheduled session window (UTC).
+  /// Scheduled session window (UTC). Replay times are seconds from [start].
   final DateTime start;
   final DateTime end;
+
+  /// Seconds from [start] to [t].
+  double secondsAt(DateTime t) => t.difference(start).inMicroseconds / 1e6;
+
+  /// The moment [seconds] after [start].
+  DateTime timeAt(double seconds) =>
+      start.add(Duration(microseconds: (seconds * 1e6).round()));
 }
 
+/// A driver in one session, with the team they drove for in it.
 class RaceDriver {
   const RaceDriver({
     required this.number,
@@ -47,6 +51,7 @@ class RaceDriver {
   final int teamColour;
 }
 
+/// One driver's lap as the timing recorded it.
 class RaceLap {
   const RaceLap({
     required this.driverNumber,
@@ -55,7 +60,6 @@ class RaceLap {
     required this.duration,
     required this.isPitOutLap,
     this.sectors = const [null, null, null],
-    this.segments = const [],
   });
 
   final int driverNumber;
@@ -70,35 +74,6 @@ class RaceLap {
 
   /// Sector times in seconds; null where timing missed one.
   final List<double?> sectors;
-
-  /// Mini-sector results across the lap, in order (see [MiniSector]).
-  final List<MiniSector> segments;
-}
-
-/// How a car did through one mini-sector, as F1 timing colours it.
-enum MiniSector {
-  none,
-
-  /// Slower than the driver's best (yellow).
-  slower,
-
-  /// The driver's personal best (green).
-  personalBest,
-
-  /// The fastest of anyone (purple).
-  overallBest,
-
-  /// Driving through the pit lane.
-  pitLane;
-
-  /// Decodes OpenF1's segment status codes.
-  static MiniSector fromCode(int? code) => switch (code) {
-    2048 => slower,
-    2049 => personalBest,
-    2051 => overallBest,
-    2064 => pitLane,
-    _ => none,
-  };
 }
 
 /// A time gap that may be measured in laps instead of seconds.
@@ -123,10 +98,14 @@ class Gap {
   }
 
   /// "+1.2", "+1L": for narrow columns.
-  String get shortLabel {
+  String get shortLabel => '+$_short';
+
+  /// "−1.2", "−1L": the same gap seen from the car ahead.
+  String get shortLabelBehind => '−$_short';
+
+  String get _short {
     final laps = this.laps;
-    if (laps != null) return '+${laps}L';
-    return '+${seconds!.toStringAsFixed(1)}';
+    return laps != null ? '${laps}L' : seconds!.toStringAsFixed(1);
   }
 
   /// "+1.234", "+1 LAP", "+2 LAPS".
@@ -164,6 +143,7 @@ class RaceStint {
   final int tyreAgeAtStart;
 }
 
+/// A pit stop: when, on which lap, and how long the car spent in the lane.
 class RacePitStop {
   const RacePitStop({
     required this.driverNumber,
@@ -175,7 +155,8 @@ class RacePitStop {
   final int driverNumber;
   final int lapNumber;
 
-  /// When the car entered the pit lane.
+  /// OpenF1's timestamp for the stop. Not pit entry: the car can already
+  /// be in its box ~10 s before it (see `tracePitLane`).
   final DateTime date;
 
   /// Seconds from pit entry to pit exit, if timing recorded it.

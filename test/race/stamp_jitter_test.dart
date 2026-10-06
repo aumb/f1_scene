@@ -1,6 +1,6 @@
 import 'dart:math' as math;
 
-import 'package:f1_scene/src/race/race_repository.dart';
+import 'package:f1_scene/src/race/location_batch.dart';
 import 'package:f1_scene/src/race/stamp_jitter.dart';
 import 'package:flutter_test/flutter_test.dart';
 

@@ -58,7 +58,7 @@ class Livery {
       nose: colour,
       engineCover: colour,
       wings: dark,
-      number: _luminance(colour) > 0.6 ? 0x16181B : 0xFFFFFF,
+      number: isLight(colour) ? 0x16181B : 0xFFFFFF,
     );
   }
 
@@ -66,14 +66,18 @@ class Livery {
     int c(int shift) => (((rgb >> shift) & 0xff) * f).round();
     return c(16) << 16 | c(8) << 8 | c(0);
   }
-
-  static double _luminance(int rgb) =>
-      (0.2126 * ((rgb >> 16) & 0xff) +
-          0.7152 * ((rgb >> 8) & 0xff) +
-          0.0722 * (rgb & 0xff)) /
-      255;
 }
 
+/// Whether dark text reads better than white on sRGB [rgb], judged by its
+/// perceived brightness.
+bool isLight(int rgb) =>
+    0.2126 * ((rgb >> 16) & 0xff) +
+        0.7152 * ((rgb >> 8) & 0xff) +
+        0.0722 * (rgb & 0xff) >
+    140;
+
+/// The seasons the schemes below were checked against. A later season falls
+/// back to OpenF1's team colours until its schemes are added.
 const _all = {2023, 2024, 2025, 2026};
 
 bool Function(String) _named(String name) =>
@@ -243,7 +247,7 @@ final _schemes = <(bool Function(String), Set<int>, Livery)>[
   ),
   (
     _named('haas'),
-    _all,
+    {2024, 2025, 2026},
     const Livery(
       upper: 0xF2F2F2,
       lower: 0x1B1C1E,

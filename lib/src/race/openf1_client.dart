@@ -14,21 +14,28 @@ import '../data/data_cache.dart';
 /// backoff, and responses are cached ([DataCache]) for as long as the caller
 /// says they stay valid.
 class OpenF1Client {
-  OpenF1Client({http.Client? httpClient, Uri? baseUri, DataCache? cache})
-    : _http = httpClient ?? http.Client(),
-      _base = baseUri ?? Uri.parse('https://api.openf1.org/v1/'),
-      cache = cache ?? DataCache.instance;
+  OpenF1Client({
+    http.Client? httpClient,
+    DataCache? cache,
+    List<RateLimit> rateLimits = freeTier,
+  }) : _http = httpClient ?? http.Client(),
+       cache = cache ?? DataCache.instance,
+       _limiter = _RateLimiter(rateLimits);
+
+  /// OpenF1's limits without an API key.
+  static const freeTier = [
+    (count: 3, window: Duration(seconds: 1)),
+    (count: 30, window: Duration(minutes: 1)),
+  ];
+
+  static final _base = Uri.parse('https://api.openf1.org/v1/');
 
   final http.Client _http;
-  final Uri _base;
 
   /// Where responses are kept.
   final DataCache cache;
 
-  final _limiter = _RateLimiter([
-    (count: 3, window: const Duration(seconds: 1)),
-    (count: 30, window: const Duration(minutes: 1)),
-  ]);
+  final _RateLimiter _limiter;
 
   /// Requests on their way, so asking twice at once sends one.
   final _inFlight = <String, Future<Uint8List>>{};
@@ -59,8 +66,8 @@ class OpenF1Client {
       final cached = await cache.read(key);
       if (cached != null) return _decode(cached);
     }
-    // A block body: returning the removed future would make the request
-    // wait on itself.
+    // `whenComplete` waits for any future its callback returns, and
+    // `=> _inFlight.remove(key)` would return this very future: deadlock.
     final body = await (_inFlight[key] ??= _fetch(uri).whenComplete(() {
       _inFlight.remove(key);
     }));
@@ -97,8 +104,6 @@ class OpenF1Client {
     return '${Uri.encodeQueryComponent(name)}${strict ? '' : '='}'
         '${Uri.encodeQueryComponent(value)}';
   }
-
-  void close() => _http.close();
 }
 
 class OpenF1Exception implements Exception {
@@ -109,14 +114,17 @@ class OpenF1Exception implements Exception {
   final String body;
 
   @override
-  String toString() => 'OpenF1 request failed ($statusCode): $uri';
+  String toString() => 'OpenF1 request failed ($statusCode): $uri\n$body';
 }
+
+/// At most [count] requests in any [window].
+typedef RateLimit = ({int count, Duration window});
 
 /// Allows at most `count` acquisitions per sliding `window`, for each limit.
 class _RateLimiter {
   _RateLimiter(this._limits);
 
-  final List<({int count, Duration window})> _limits;
+  final List<RateLimit> _limits;
   final _history = <DateTime>[];
   Future<void> _tail = Future.value();
 

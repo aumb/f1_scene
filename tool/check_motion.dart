@@ -1,86 +1,82 @@
-// Measures how smoothly cars move in a replay: poses five minutes of a race
-// at 60 fps through the app's own motion code and reports how often a car
-// would need more acceleration than an F1 car can produce (6 g), which is
-// what shows as stutter.
+// Measures how cars move in a replay, posing them at 60 fps through the
+// app's own motion code:
 //
-//   dart run tool/check_motion.dart [year] [meeting name filter]
-//       [--start] [--raw] [--no-traffic]
+// - smoothness: how often a car would need more acceleration than an F1 car
+//   can produce (6 g), split into surge (speed changing: what reads as
+//   stutter) and sway (turning or drifting sideways);
+// - wobble: how often each car's sideways offset, heading and orbit-view
+//   size reverse direction at a visible rate, and the fastest each changes
+//   (a jump shows as a speed no car could have);
+// - overlaps: how often two cars within a car length sit less than a car's
+//   width apart.
 //
-// It also counts cars overlapping each other. --start measures the first
-// five minutes from lights out instead of a mid-race stint; --raw skips the
-// stamp jitter correction and --no-traffic the side-by-side separation, to
-// see what each contributes.
-import 'dart:convert';
+//   dart run tool/check_motion.dart [year] [meeting] [--start] [--raw]
+//       [--no-traffic]
+//
+// year defaults to 2024 and meeting (part of its name) to "azerbaijan".
+// Five minutes are measured from a clean mid-race lap, or from lights out
+// with --start. --raw skips the stamp jitter correction and --no-traffic the
+// side-by-side separation, to see what each contributes. Run it from the
+// repository root (it reads assets/circuits/).
 import 'dart:io';
 import 'dart:math' as math;
 
-import 'package:f1_scene/src/data/circuit.dart';
-import 'package:f1_scene/src/geometry/track_alignment.dart';
+import 'package:f1_scene/src/data/circuit_files.dart';
 import 'package:f1_scene/src/geometry/track_mesh.dart';
 import 'package:f1_scene/src/geometry/track_projector.dart';
 import 'package:f1_scene/src/race/car_motion.dart';
 import 'package:f1_scene/src/race/location_timeline.dart';
 import 'package:f1_scene/src/race/pit_lane_tracer.dart';
 import 'package:f1_scene/src/race/race_repository.dart';
+import 'package:f1_scene/src/race/session_alignment.dart';
 import 'package:f1_scene/src/race/stamp_jitter.dart';
 import 'package:f1_scene/src/race/traffic.dart';
 import 'package:f1_scene/src/race/venues.dart';
 
-Map<String, dynamic> _read(String path) =>
-    jsonDecode(File('assets/circuits/$path').readAsStringSync())
-        as Map<String, dynamic>;
+/// Seconds of race measured, and the frame step.
+const _span = 300;
+const _dt = 1 / 60;
 
-Circuit _circuit(String id) {
-  final summary = [
-    for (final c
-        in (_read('index.json')['circuits'] as List)
-            .cast<Map<String, dynamic>>())
-      CircuitSummary.fromJson(c),
-  ].firstWhere((s) => s.id == id);
-  return Circuit.fromJson(
-    summary: summary,
-    layout: _read('layouts/$id.geojson'),
-    elevation: _read('elevations/$id.json'),
-    markers: _read('markers/$id.json'),
-    width: summary.hasWidthProfile ? _read('widths/$id.json') : null,
-  );
-}
+/// About 6 g, in m/s²: more than an F1 car brakes or corners at.
+const _harsh = 60.0;
+
+/// Seconds the wobble measure covers (it is the slow one).
+const _wobbleSpan = 120.0;
+
+/// A car's footprint, in metres.
+const _carLength = 5.2, _carWidth = 2.0;
 
 Future<void> main(List<String> args) async {
   final raw = args.contains('--raw');
   final separate = !args.contains('--no-traffic');
-  final rest = args.where((a) => !a.startsWith('--')).toList();
+  final rest = [
+    for (final a in args)
+      if (!a.startsWith('--')) a,
+  ];
   final year = rest.isEmpty ? 2024 : int.parse(rest.first);
   final filter = rest.length > 1 ? rest[1].toLowerCase() : 'azerbaijan';
+
   final repository = RaceRepository();
   final race = (await repository.races(year))
-      .firstWhere((r) => r.meetingName.toLowerCase().contains(filter));
-  final id = circuitIdByOpenF1Key[race.circuitKey]!;
+      .where((r) => r.meetingName.toLowerCase().contains(filter))
+      .firstOrNull;
+  final id = race == null ? null : circuitIdByOpenF1Key[race.circuitKey];
+  if (race == null || id == null) {
+    stderr.writeln('No $year race matching "$filter" with a vendored layout.');
+    exit(1);
+  }
 
-  // Align on a clean lap, as the replay does.
-  final laps = (await repository.laps(race.sessionKey))
-      .where((l) => l.start != null && l.duration != null && !l.isPitOutLap)
-      .where((l) => l.lapNumber > 2)
-      .toList();
-  final durations = laps.map((l) => l.duration!).toList()..sort();
-  final median = durations[durations.length ~/ 2];
-  final lap = laps.firstWhere((l) => l.duration! < median * 1.05);
-  final stations = TrackStations.sample(_circuit(id));
-  final reference = (await repository.locations(
-    race.sessionKey,
-    epoch: race.start,
-    from: lap.start!,
-    to: lap.start!.add(Duration(milliseconds: (lap.duration! * 1000).round())),
-    driver: lap.driverNumber,
-  )).samples[lap.driverNumber]!;
-  final transform = alignToPath(
-    source: [
-      for (var i = 0; i < reference.t.length; i++)
-        (reference.x[i], reference.y[i]),
-    ],
-    target: [for (final c in stations.center) (c.x, c.z)],
-  ).transform;
+  // Align and trace the pit lane as the replay does.
+  final stations = TrackStations.sample(loadCircuit(id));
   final track = TrackProjector(stations);
+  final laps = await repository.laps(race.sessionKey);
+  final reference = referenceLap(laps);
+  final transform = (await alignToLap(
+    repository: repository,
+    session: race,
+    lap: reference,
+    stations: stations,
+  )).transform;
   final pitLane = await tracePitLane(
     repository: repository,
     session: race,
@@ -89,49 +85,70 @@ Future<void> main(List<String> args) async {
     track: track,
   );
 
-  // Five minutes from the reference lap on (or from lights out), every car.
-  final allLaps = await repository.laps(race.sessionKey);
   final begin = args.contains('--start')
-      ? allLaps
+      ? laps
             .where((l) => l.lapNumber == 1 && l.start != null)
             .map((l) => l.start!)
             .reduce((a, b) => a.isBefore(b) ? a : b)
-      : lap.start!;
+      : reference.start!;
   final batch = await repository.locations(
     race.sessionKey,
     epoch: race.start,
     from: begin,
-    to: begin.add(const Duration(minutes: 5)),
+    to: begin.add(const Duration(seconds: _span)),
   );
-  final from = begin.difference(race.start).inMicroseconds / 1e6;
-  final timeline = LocationTimeline(start: from, end: from + 300)
+  final from = race.secondsAt(begin);
+  final timeline = LocationTimeline(start: from, end: from + _span)
     ..addChunk(0, raw ? batch : await correctStampJitter(batch));
   final motion = CarMotion(
     alignment: transform,
     track: track,
     pitLane: pitLane == null ? null : TrackProjector(pitLane),
   );
-
   final traffic = TrafficSeparation(track);
   final drivers = timeline.drivers.toList();
+
+  /// Every car's pose at [t], as the replay would show it.
   Map<int, CarPose> posesAt(double t) {
     final poses = {
       for (final d in drivers)
         d: ?motion.pose(
           d,
-          timeline.windowAt(d, t, reach: CarMotion.smoothing),
+          timeline.windowAt(d, t, reach: CarMotion.fitHalfWidth),
           t,
         ),
     };
     return separate ? traffic.separate(poses) : poses;
   }
 
-  const dt = 1 / 60;
-  const harshLimit = 60.0; // m/s², about 6 g
+  // Skip the edges, where the window around each pose is one-sided.
+  final start = from + 3, end = from + _span - 3;
+  stdout
+    ..writeln(
+      '${race.meetingName} $year'
+      '${raw ? ' (raw stamps)' : ''}'
+      '${separate ? '' : ' (no traffic separation)'}: '
+      '${drivers.length} cars',
+    )
+    ..writeln(_smoothness(posesAt, drivers, start, end))
+    ..writeln(_wobble(posesAt, drivers, start, start + _wobbleSpan))
+    ..writeln(_overlaps(posesAt, drivers, track, start, end));
+  // The HTTP client keeps the process alive; we're done.
+  exit(0);
+}
+
+typedef _Poses = Map<int, CarPose> Function(double t);
+
+/// Surge and sway, from second differences of each car's position.
+String _smoothness(
+  _Poses posesAt,
+  List<int> drivers,
+  double start,
+  double end,
+) {
   final surges = <double>[], sways = <double>[];
-  var harshSurge = 0, harshSway = 0;
   final recent = <Map<int, CarPose>>[];
-  for (var t = from + 3; t < from + 297; t += dt) {
+  for (var t = start; t < end; t += _dt) {
     recent.add(posesAt(t));
     if (recent.length > 3) recent.removeAt(0);
     if (recent.length < 3) continue;
@@ -140,158 +157,123 @@ Future<void> main(List<String> args) async {
       if (a == null || b == null || c == null) continue;
       if (a.inPit || b.inPit || c.inPit) continue;
       final acceleration =
-          (a.position + c.position - b.position * 2) / (dt * dt);
-      // Split into surge (speed changing, the stutter) and sway (turning
-      // or drifting sideways).
+          (a.position + c.position - b.position * 2) / (_dt * _dt);
       final forward = (c.position - a.position)..normalize();
-      final surge = acceleration.dot(forward).abs();
-      final sway = (acceleration - forward * acceleration.dot(forward)).length;
-      surges.add(surge);
-      sways.add(sway);
-      if (surge > harshLimit) harshSurge++;
-      if (sway > harshLimit) harshSway++;
+      final surge = acceleration.dot(forward);
+      surges.add(surge.abs());
+      sways.add((acceleration - forward * surge).length);
     }
   }
-  // Wobble: how often each car's sideways offset, heading and orbit-view
-  // size reverse direction at a visible rate (a clean lane change reverses
-  // once or twice, a wobble constantly), and the fastest each changes: a
-  // jump shows as a sideways speed no car could have.
-  {
-    final lateralTurns = <int, int>{},
-        yawTurns = <int, int>{},
-        scaleTurns = <int, int>{};
-    final lastLat = <int, double>{}, lastLatRate = <int, double>{};
-    final lastYaw = <int, double>{}, lastYawRate = <int, double>{};
-    final lastScale = <int, double>{}, lastScaleRate = <int, double>{};
-    var maxLatRate = 0.0, maxYawRate = 0.0, maxScaleRate = 0.0;
-    void turn(
-      Map<int, int> turns,
-      Map<int, double> last,
-      Map<int, double> lastRate,
-      int d,
-      double v,
-      double threshold,
-      void Function(double) rate, {
-      bool wraps = false,
-    }) {
-      final previous = last[d];
-      last[d] = v;
-      if (previous == null) return;
-      var change = v - previous;
-      // Headings wrap at ±π; take the short way round.
-      if (wraps) change = (change + math.pi) % (2 * math.pi) - math.pi;
-      final r = change / dt;
-      rate(r.abs());
-      final pr = lastRate[d];
-      if (r.abs() < threshold) return;
-      if (pr != null && pr.sign != r.sign) turns[d] = (turns[d] ?? 0) + 1;
-      lastRate[d] = r;
-    }
-
-    for (var t = from + 3; t < from + 123; t += dt) {
-      final poses = posesAt(t);
-      final scales = readableScales(poses, 4);
-      for (final MapEntry(key: d, value: p) in poses.entries) {
-        if (p.inPit) continue;
-        turn(
-          lateralTurns,
-          lastLat,
-          lastLatRate,
-          d,
-          p.lateral,
-          0.5,
-          (r) => maxLatRate = math.max(maxLatRate, r),
-        );
-        turn(
-          yawTurns,
-          lastYaw,
-          lastYawRate,
-          d,
-          p.heading,
-          0.1,
-          (r) => maxYawRate = math.max(maxYawRate, r),
-          wraps: true,
-        );
-        turn(
-          scaleTurns,
-          lastScale,
-          lastScaleRate,
-          d,
-          scales[d]!,
-          0.5,
-          (r) => maxScaleRate = math.max(maxScaleRate, r),
-        );
-      }
-    }
-    int total(Map<int, int> m) => m.values.fold(0, (a, b) => a + b);
-    final perCarMinute = drivers.length * 2;
-    stdout.writeln(
-      '  reversals per car-minute: lateral ${(total(lateralTurns) / perCarMinute).toStringAsFixed(1)}, '
-      'heading ${(total(yawTurns) / perCarMinute).toStringAsFixed(1)}, orbit size ${(total(scaleTurns) / perCarMinute).toStringAsFixed(1)}; '
-      'fastest: lateral ${maxLatRate.toStringAsFixed(1)} m/s, heading '
-      '${maxYawRate.toStringAsFixed(1)} rad/s, size '
-      '${maxScaleRate.toStringAsFixed(1)} x/s',
-    );
-  }
-
-  String report(String name, List<double> values, int harsh) {
+  String line(String name, List<double> values) {
     values.sort();
+    final over = values.where((v) => v > _harsh).length / values.length;
     double quantile(double q) => values[((values.length - 1) * q).round()];
-    return '  $name: over 6 g ${(100 * harsh / values.length).toStringAsFixed(1)}%, '
+    return '  $name: over 6 g ${(100 * over).toStringAsFixed(1)}%, '
         'median ${quantile(0.5).toStringAsFixed(1)} '
         'p99 ${quantile(0.99).toStringAsFixed(0)} m/s²';
   }
 
-  // Cars overlapping: pairs closer than a car's footprint (5.2 m by 2.0 m)
-  // in track space, sampled at 10 Hz.
+  return '${line('surge (speed changes)', surges)}\n'
+      '${line('sway (turning, sideways)', sways)}';
+}
+
+/// How often each car's sideways offset, heading and orbit-view size reverse
+/// direction at a visible rate (a clean lane change reverses once or twice, a
+/// wobble constantly), and the fastest each changed.
+String _wobble(_Poses posesAt, List<int> drivers, double start, double end) {
+  final lateral = _Channel(minRate: 0.5);
+  final heading = _Channel(minRate: 0.1, wraps: true);
+  final size = _Channel(minRate: 0.5);
+  for (var t = start; t < end; t += _dt) {
+    final poses = posesAt(t);
+    final scales = readableScales(poses, 4);
+    for (final MapEntry(key: d, value: p) in poses.entries) {
+      if (p.inPit) continue;
+      lateral.record(d, p.lateral);
+      heading.record(d, p.heading);
+      size.record(d, scales[d]!);
+    }
+  }
+  final carMinutes = drivers.length * (end - start) / 60;
+  String perCarMinute(_Channel c) =>
+      (c.reversals / carMinutes).toStringAsFixed(1);
+  return '  reversals per car-minute: lateral ${perCarMinute(lateral)}, '
+      'heading ${perCarMinute(heading)}, orbit size ${perCarMinute(size)}; '
+      'fastest: lateral ${lateral.fastest.toStringAsFixed(1)} m/s, '
+      'heading ${heading.fastest.toStringAsFixed(1)} rad/s, '
+      'size ${size.fastest.toStringAsFixed(1)} x/s';
+}
+
+/// One quantity followed per car, counting how often its rate of change
+/// flips sign.
+class _Channel {
+  _Channel({required this.minRate, this.wraps = false});
+
+  /// Rates slower than this are too slow to see and aren't counted.
+  final double minRate;
+
+  /// Angles wrap at ±π; changes take the short way round.
+  final bool wraps;
+
+  int reversals = 0;
+  double fastest = 0;
+  final _last = <int, double>{};
+  final _lastRate = <int, double>{};
+
+  void record(int driver, double value) {
+    final previous = _last[driver];
+    _last[driver] = value;
+    if (previous == null) return;
+    var change = value - previous;
+    if (wraps) change = (change + math.pi) % (2 * math.pi) - math.pi;
+    final rate = change / _dt;
+    fastest = math.max(fastest, rate.abs());
+    if (rate.abs() < minRate) return;
+    final before = _lastRate[driver];
+    if (before != null && before.sign != rate.sign) reversals++;
+    _lastRate[driver] = rate;
+  }
+}
+
+/// Pairs of cars within a car length along the track, sampled at 10 Hz, and
+/// how many of them sit less than a car's width apart.
+String _overlaps(
+  _Poses posesAt,
+  List<int> drivers,
+  TrackProjector track,
+  double start,
+  double end,
+) {
+  final lap = track.stations.length * track.metersPerStation;
   ({double along, double lateral})? trackSpace(CarPose? p) {
     if (p == null || p.inPit) return null;
     final q = track.project(p.position.x, p.position.z);
     return (along: q.along * track.metersPerStation, lateral: q.lateral);
   }
 
-  final lapLength = stations.length * track.metersPerStation;
-  double gap(double a, double b) {
-    var d = a - b;
-    if (d > lapLength / 2) d -= lapLength;
-    if (d < -lapLength / 2) d += lapLength;
-    return d;
-  }
-
-  var overlapping = 0, alongside = 0;
-  final separations = <double>[];
-  for (var t = from + 3; t < from + 297; t += 0.1) {
+  var overlapping = 0;
+  final gaps = <double>[];
+  for (var t = start; t < end; t += 0.1) {
     final poses = posesAt(t);
-    final at = {for (final d in drivers) d: trackSpace(poses[d])};
-    for (var i = 0; i < drivers.length; i++) {
-      for (var j = i + 1; j < drivers.length; j++) {
-        final a = at[drivers[i]], b = at[drivers[j]];
+    final at = [for (final d in drivers) trackSpace(poses[d])];
+    for (var i = 0; i < at.length; i++) {
+      for (var j = i + 1; j < at.length; j++) {
+        final a = at[i], b = at[j];
         if (a == null || b == null) continue;
-        final ds = gap(a.along, b.along), dl = a.lateral - b.lateral;
-        if (ds.abs() > 5.2) continue;
-        alongside++;
-        separations.add(dl.abs());
-        if (dl.abs() < 2.0) overlapping++;
+        // The short way round the lap.
+        var along = (a.along - b.along).abs() % lap;
+        if (along > lap / 2) along = lap - along;
+        if (along > _carLength) continue;
+        final apart = (a.lateral - b.lateral).abs();
+        gaps.add(apart);
+        if (apart < _carWidth) overlapping++;
       }
     }
   }
-  separations.sort();
-  final overlapReport = alongside == 0
-      ? '  no cars alongside'
-      : '  alongside (within a car length): $alongside pair samples, '
-            'lateral gap median '
-            '${separations[separations.length ~/ 2].toStringAsFixed(1)} m; '
-            'overlapping $overlapping '
-            '(${(100 * overlapping / alongside).toStringAsFixed(0)}%)';
-
-  stdout
-    ..writeln(
-      '${race.meetingName} $year${raw ? ' (raw stamps)' : ''}'
-      '${separate ? '' : ' (no traffic separation)'}: '
-      '${timeline.drivers.length} cars, ${surges.length} frames',
-    )
-    ..writeln(report('surge (speed changes)', surges, harshSurge))
-    ..writeln(report('sway (turning, sideways)', sways, harshSway))
-    ..writeln(overlapReport);
-  exit(0);
+  if (gaps.isEmpty) return '  no cars alongside';
+  gaps.sort();
+  return '  alongside (within a car length): ${gaps.length} pair samples, '
+      'lateral gap median ${gaps[gaps.length ~/ 2].toStringAsFixed(1)} m; '
+      'overlapping $overlapping '
+      '(${(100 * overlapping / gaps.length).toStringAsFixed(0)}%)';
 }

@@ -5,7 +5,7 @@ import 'package:f1_scene/src/geometry/track_mesh.dart';
 import 'package:f1_scene/src/geometry/track_projector.dart';
 import 'package:f1_scene/src/race/car_motion.dart';
 import 'package:f1_scene/src/race/location_timeline.dart';
-import 'package:f1_scene/src/race/race_repository.dart';
+import 'package:f1_scene/src/race/location_batch.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:vector_math/vector_math.dart' show Matrix4, Vector3;
 
@@ -79,7 +79,7 @@ void main() {
     final timeline = LocationTimeline(start: 0, end: 20)..addChunk(0, batch);
     final motion = CarMotion(alignment: identity, track: track);
     Vector3 at(double t) => motion
-        .pose(1, timeline.windowAt(1, t, reach: CarMotion.smoothing), t)!
+        .pose(1, timeline.windowAt(1, t, reach: CarMotion.fitHalfWidth), t)!
         .position;
 
     const dt = 1 / 60;

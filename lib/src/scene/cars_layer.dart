@@ -99,11 +99,7 @@ class CarsLayer {
 /// a transparent background, sized for the number plates.
 Future<Texture2D> numberTexture(int number, int fill) async {
   const width = 256, height = 160;
-  final light =
-      0.2126 * ((fill >> 16) & 0xff) +
-          0.7152 * ((fill >> 8) & 0xff) +
-          0.0722 * (fill & 0xff) >
-      140;
+  final light = isLight(fill);
   TextPainter figures(Paint paint) => TextPainter(
     text: TextSpan(
       text: '$number',

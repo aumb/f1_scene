@@ -62,7 +62,6 @@ enum SectorRating { none, slower, personalBest, overallBest }
 class DriverTiming {
   const DriverTiming({
     required this.lap,
-    this.lapElapsed,
     this.lastLap,
     this.bestLap,
     this.lastSectors = const [],
@@ -70,9 +69,6 @@ class DriverTiming {
 
   /// The lap being driven; 0 before the start.
   final int lap;
-
-  /// Seconds into the current lap.
-  final double? lapElapsed;
 
   /// The most recent completed lap.
   final RaceLap? lastLap;
@@ -100,11 +96,11 @@ class TimingBoard {
 
     for (final p in positions) {
       _positions
-          .putIfAbsent(p.driver, _Series.new)
+          .putIfAbsent(p.driver, _StepSeries.new)
           .add(since(p.date), p.position);
     }
     for (final i in intervals) {
-      _intervals.putIfAbsent(i.driver, _Series.new).add(since(i.date), (
+      _intervals.putIfAbsent(i.driver, _StepSeries.new).add(since(i.date), (
         i.gap,
         i.interval,
       ));
@@ -131,16 +127,24 @@ class TimingBoard {
       for (final l in _allLaps)
         if (l.lap.duration != null) l.lap.duration!,
     ]..sort();
-    _medianLap = durations.isEmpty ? 90 : durations[durations.length ~/ 2];
+    _medianLap = durations.isEmpty
+        ? _typicalLap
+        : durations[durations.length ~/ 2];
     final lapCount = laps.fold(0, (m, l) => math.max(m, l.lapNumber));
     _finish = _allLaps
         .where((l) => l.lap.lapNumber == lapCount)
         .fold(double.infinity, (m, l) => math.min(m, l.end));
   }
 
+  /// A position for a driver the timing hasn't placed yet: after everyone.
+  static const _unplaced = 99;
+
+  /// Seconds a lap is taken to last when the timing has none to go by.
+  static const double _typicalLap = 90;
+
   final List<int> _drivers;
-  final _positions = <int, _Series<int>>{};
-  final _intervals = <int, _Series<(Gap?, Gap?)>>{};
+  final _positions = <int, _StepSeries<int>>{};
+  final _intervals = <int, _StepSeries<(Gap?, Gap?)>>{};
   final _laps = <int, List<_TimedLap>>{};
   late final List<_TimedLap> _allLaps;
   final _stints = <int, List<RaceStint>>{};
@@ -154,27 +158,7 @@ class TimingBoard {
     final started = _drivers.any((d) => _lapOf(d, t) > 0);
     final rows = [
       for (final driver in _drivers)
-        () {
-          final lap = _lapOf(driver, t);
-          // Gaps mean nothing on the grid or the formation lap.
-          final (gap, interval) = started
-              ? _intervals[driver]?.at(t) ?? (null, null)
-              : (null, null);
-          final stint = _stintOf(driver, math.max(lap, 1));
-          return TowerRow(
-            driver: driver,
-            position: _positions[driver]?.at(t) ?? 99,
-            lap: lap,
-            gap: gap,
-            interval: interval,
-            compound: stint?.compound,
-            tyreAge: stint == null
-                ? null
-                : stint.tyreAgeAtStart + math.max(0, lap - stint.lapStart),
-            inPit: inPit.contains(driver),
-            retired: started && _retiredAt(driver, t),
-          );
-        }(),
+        _rowFor(driver, t, started: started, inPit: inPit.contains(driver)),
     ];
     rows.sort((a, b) {
       if (a.retired != b.retired) return a.retired ? 1 : -1;
@@ -184,14 +168,39 @@ class TimingBoard {
     return rows;
   }
 
+  TowerRow _rowFor(
+    int driver,
+    double t, {
+    required bool started,
+    required bool inPit,
+  }) {
+    final lap = _lapOf(driver, t);
+    // Gaps mean nothing on the grid or the formation lap.
+    final (gap, interval) = started
+        ? _intervals[driver]?.at(t) ?? (null, null)
+        : (null, null);
+    final stint = _stintOf(driver, math.max(lap, 1));
+    return TowerRow(
+      driver: driver,
+      position: _positions[driver]?.at(t) ?? _unplaced,
+      lap: lap,
+      gap: gap,
+      interval: interval,
+      compound: stint?.compound,
+      tyreAge: stint == null
+          ? null
+          : stint.tyreAgeAtStart + math.max(0, lap - stint.lapStart),
+      inPit: inPit,
+      retired: started && _retiredAt(driver, t),
+    );
+  }
+
   DriverTiming driverAt(int driver, double t) {
     final laps = _laps[driver] ?? const [];
     final lap = _lapOf(driver, t);
-    _TimedLap? current;
     _TimedLap? last;
     double? best;
     for (final l in laps) {
-      if (l.start <= t && l.lap.lapNumber == lap) current = l;
       if (l.end <= t) {
         last = l;
         final d = l.lap.duration;
@@ -200,7 +209,6 @@ class TimingBoard {
     }
     return DriverTiming(
       lap: lap,
-      lapElapsed: current == null ? null : t - current.start,
       lastLap: last?.lap,
       bestLap: best,
       lastSectors: last == null ? const [] : _rateSectors(last),
@@ -272,7 +280,7 @@ class _TimedLap {
 }
 
 /// Values that change at given times; [at] reads the latest by then.
-class _Series<T> {
+class _StepSeries<T> {
   final _times = <double>[];
   final _values = <T>[];
 

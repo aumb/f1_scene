@@ -28,20 +28,21 @@ class TrafficSeparation {
 
   /// Along-track gap, meters, under which two cars must be fully side by
   /// side: a car length with a little room.
-  static const double length = 5.6;
+  static const double sideBySideGap = 5.6;
 
   /// Center-to-center distance the springs pull cars side by side to,
   /// meters; a lone pair settles at [_maxShare] of it.
-  static const double width = 2.4;
+  static const double sideBySideSpacing = 2.4;
 
-  /// The most of [width] a lone pair is held to: a stiffer spring would
-  /// settle slower in the solve.
+  /// The most of [sideBySideSpacing] a lone pair is held to: a stiffer
+  /// spring would settle slower in the solve.
   static const double _maxShare = 0.95;
 
   /// Gauss-Seidel sweeps; enough to settle a pack several abreast.
   static const _sweeps = 40;
 
-  /// How far back to solve again for the speed of each sideways step.
+  /// Seconds back to solve again, to tell how fast each car is stepping
+  /// sideways and so how far to turn it into the step.
   static const double _yawLead = 0.15;
 
   /// [poses] with every car on the circuit moved clear of the others.
@@ -65,16 +66,10 @@ class TrafficSeparation {
         continue;
       }
       final placed = track.place(pose.along!, now[i]);
-      var heading = pose.heading;
-      if (pose.speed > 2) {
-        final sideways = (now[i] - before[i]) / _yawLead;
-        heading += math
-            .atan2(sideways, math.max(pose.speed, CarMotion.minYawSpeed))
-            .clamp(-0.25, 0.25);
-      }
+      final sideways = (now[i] - before[i]) / _yawLead;
       out[driver] = CarPose(
         placed.position,
-        heading,
+        pose.heading + CarMotion.yawFor(sideways, pose.speed),
         pitch: pose.pitch,
         along: pose.along,
         lateral: now[i],
@@ -102,7 +97,8 @@ class TrafficSeparation {
     ];
 
     // Each car's springs to the cars close to it: the other car, the
-    // spring's stiffness and which side this car takes (+1 left).
+    // spring's stiffness and which side this car takes (+1 left). Cars are
+    // in number order, so car i, the lower number, always takes the left.
     final springs = [for (final _ in cars) <(int, double, double)>[]];
     var any = false;
     for (var i = 0; i < cars.length; i++) {
@@ -111,17 +107,16 @@ class TrafficSeparation {
         if (gap > lap / 2) gap = lap - gap;
         // Start stepping aside sooner the faster the gap closes.
         final closing = (cars[i].pose.speed - cars[j].pose.speed).abs();
-        final reach = length + (1.2 * closing).clamp(4.0, 25.0);
+        final reach = sideBySideGap + (1.2 * closing).clamp(4.0, 25.0);
         if (gap >= reach) continue;
-        final f = ((reach - gap) / (reach - length)).clamp(0.0, 1.0);
+        final f = ((reach - gap) / (reach - sideBySideGap)).clamp(0.0, 1.0);
         final share = math.min(f * f * (3 - 2 * f), _maxShare); // smoothstep
         if (share <= 0) continue;
-        // Stiffness that holds a lone pair exactly [share] of [width] apart
-        // against each car's pull back to the line.
+        // Stiffness that holds a lone pair exactly [share] of
+        // [sideBySideSpacing] apart against each car's pull back to the line.
         final k = share / (2 * (1 - share));
-        final side = cars[i].driver < cars[j].driver ? 1.0 : -1.0;
-        springs[i].add((j, k, side));
-        springs[j].add((i, k, -side));
+        springs[i].add((j, k, 1.0));
+        springs[j].add((i, k, -1.0));
         any = true;
       }
     }
@@ -129,8 +124,8 @@ class TrafficSeparation {
 
     // Each car in turn settles where its pull back to the line balances
     // its springs, inside the track edges. A spring only pushes: once its
-    // two cars are [width] apart it lets go, so the outer cars of three
-    // abreast don't squeeze the middle one.
+    // two cars are [sideBySideSpacing] apart it lets go, so the outer cars
+    // of three abreast don't squeeze the middle one.
     final lateral = [...base];
     for (var sweep = 0; sweep < _sweeps; sweep++) {
       for (var i = 0; i < cars.length; i++) {
@@ -139,7 +134,7 @@ class TrafficSeparation {
         // Where each spring lets go of this car, given the other's place.
         bool pushing((int, double, double) spring, double at) {
           final (j, _, side) = spring;
-          final free = lateral[j] + side * width;
+          final free = lateral[j] + side * sideBySideSpacing;
           return side > 0 ? at < free : at > free;
         }
 
@@ -151,7 +146,7 @@ class TrafficSeparation {
           for (final spring in mine) {
             if (!pushing(spring, at)) continue;
             final (j, k, side) = spring;
-            sum += k * (lateral[j] + side * width);
+            sum += k * (lateral[j] + side * sideBySideSpacing);
             weight += k;
           }
           final next = sum / weight;
@@ -177,7 +172,8 @@ class TrafficSeparation {
 /// comes within [scale] car lengths, smoothly, so a lone car stays easy to
 /// spot and a battle shows who is where.
 Map<int, double> readableScales(Map<int, CarPose> poses, double scale) {
-  const length = 5.4, width = 2.1; // footprint with a little room
+  // A car's footprint with a little room, meters.
+  const footprintLength = 5.4, footprintWidth = 2.1;
   final cars = poses.entries.toList();
   final out = {for (final MapEntry(:key) in cars) key: scale};
   for (var i = 0; i < cars.length; i++) {
@@ -189,12 +185,12 @@ Map<int, double> readableScales(Map<int, CarPose> poses, double scale) {
         b.position.x - a.position.x,
         b.position.z - a.position.z,
       );
-      if (d.length > scale * length) continue;
+      if (d.length > scale * footprintLength) continue;
       // How many times its own footprint fits between the two, measured
       // along and across the car, with rounded corners so it varies
       // smoothly as cars move round each other.
-      final along = d.dot(forward) / length;
-      final across = d.cross(forward) / width;
+      final along = d.dot(forward) / footprintLength;
+      final across = d.cross(forward) / footprintWidth;
       final fits = math
           .pow(math.pow(along, 4) + math.pow(across, 4), 0.25)
           .toDouble();

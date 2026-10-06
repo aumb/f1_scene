@@ -1,92 +1,60 @@
-// Fits OpenF1's circuit frame onto every vendored layout raced in a season
-// and reports how well each lines up.
+// Fits OpenF1's circuit frame onto every vendored layout raced in a season,
+// the way a replay does, and reports how well each lines up and whether a
+// pit lane could be traced.
 //
-//   dart run tool/check_alignment.dart [year]
+//   dart run tool/check_alignment.dart [year]     (default 2024)
 //
-// A large error means the vendored layout differs from the circuit raced
-// that year (a reprofiled corner, a new chicane).
-import 'dart:convert';
+// Run it from the repository root (it reads assets/circuits/). A large
+// error means the vendored layout differs from the circuit raced that year:
+// a reprofiled corner, a new chicane.
 import 'dart:io';
 import 'dart:math' as math;
 
-import 'package:f1_scene/src/data/circuit.dart';
-import 'package:f1_scene/src/geometry/track_alignment.dart';
+import 'package:f1_scene/src/data/circuit_files.dart';
 import 'package:f1_scene/src/geometry/track_mesh.dart';
 import 'package:f1_scene/src/geometry/track_projector.dart';
 import 'package:f1_scene/src/race/pit_lane_tracer.dart';
 import 'package:f1_scene/src/race/race_repository.dart';
+import 'package:f1_scene/src/race/session_alignment.dart';
 import 'package:f1_scene/src/race/venues.dart';
-
-Map<String, dynamic> _read(String path) =>
-    jsonDecode(File('assets/circuits/$path').readAsStringSync())
-        as Map<String, dynamic>;
-
-Circuit _circuit(String id) {
-  final summary = [
-    for (final c
-        in (_read('index.json')['circuits'] as List)
-            .cast<Map<String, dynamic>>())
-      CircuitSummary.fromJson(c),
-  ].firstWhere((s) => s.id == id);
-  return Circuit.fromJson(
-    summary: summary,
-    layout: _read('layouts/$id.geojson'),
-    elevation: _read('elevations/$id.json'),
-    markers: _read('markers/$id.json'),
-    width: summary.hasWidthProfile ? _read('widths/$id.json') : null,
-  );
-}
 
 Future<void> main(List<String> args) async {
   final year = args.isEmpty ? 2024 : int.parse(args.first);
   final repository = RaceRepository();
   for (final race in await repository.races(year)) {
+    final name = race.meetingName.padRight(28);
     final id = circuitIdByOpenF1Key[race.circuitKey];
     if (id == null) {
-      stdout.writeln('${race.meetingName.padRight(28)} no layout');
+      stdout.writeln('$name no layout');
       continue;
     }
-    final laps = (await repository.laps(race.sessionKey))
-        .where((l) => l.start != null && l.duration != null && !l.isPitOutLap)
-        .where((l) => l.lapNumber > 2)
-        .toList();
-    final durations = laps.map((l) => l.duration!).toList()..sort();
-    final median = durations[durations.length ~/ 2];
-    final lap = laps.firstWhere((l) => l.duration! < median * 1.05);
-    final batch = await repository.locations(
-      race.sessionKey,
-      epoch: race.start,
-      from: lap.start!,
-      to: lap.start!.add(
-        Duration(milliseconds: (lap.duration! * 1000).round()),
-      ),
-      driver: lap.driverNumber,
+    final stations = TrackStations.sample(loadCircuit(id));
+    final laps = await repository.laps(race.sessionKey);
+    final alignment = await alignToLap(
+      repository: repository,
+      session: race,
+      lap: referenceLap(laps),
+      stations: stations,
     );
-    final s = batch.samples[lap.driverNumber]!;
-    final stations = TrackStations.sample(_circuit(id));
-    final result = alignToPath(
-      source: [for (var i = 0; i < s.t.length; i++) (s.x[i], s.y[i])],
-      target: [for (final c in stations.center) (c.x, c.z)],
-    );
-    final t = result.transform;
-    final track = TrackProjector(stations);
+    final t = alignment.transform;
     final pit = await tracePitLane(
       repository: repository,
       session: race,
       stops: await repository.pitStops(race.sessionKey),
       transform: t,
-      track: track,
+      track: TrackProjector(stations),
     );
     final pitText = pit == null
         ? 'no pit lane'
         : 'pit lane ${(TrackProjector(pit).metersPerStation * pit.segmentCount).toStringAsFixed(0)} m';
     stdout.writeln(
-      '${race.meetingName.padRight(28)} $id  '
-      'rms ${result.rmsError.toStringAsFixed(1).padLeft(5)} m  '
+      '$name $id  '
+      'rms ${alignment.rmsError.toStringAsFixed(1).padLeft(5)} m  '
       'scale ${t.scale.toStringAsFixed(4)}  '
       'rot ${(t.rotation * 180 / math.pi).toStringAsFixed(0).padLeft(4)}°  '
       '${t.mirrored ? 'mirrored ' : ''}$pitText',
     );
   }
+  // The HTTP client keeps the process alive; we're done.
   exit(0);
 }
