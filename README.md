@@ -132,7 +132,15 @@ dart run tool/fetch_circuits.dart
 
 Sources and licenses are listed in [NOTICE.md](NOTICE.md). Race data
 (OpenF1) and scenery (OpenStreetMap, via F1TrackViewer) are fetched at
-runtime and held in memory, never committed to this repo.
+runtime by each visitor's browser, never committed to this repo.
+
+OpenF1's free tier allows 30 requests a minute per visitor, so data that
+can no longer change is cached on the visitor's device: races finished more
+than a day ago, past seasons' calendars and the pinned scenery files (the
+browser's Cache Storage on the web, the temporary directory elsewhere).
+Revisiting or reloading a race costs no requests. Car positions are stored
+in a compact binary form, ~220 KB per five minutes instead of ~3 MB of
+JSON.
 
 ## License
 

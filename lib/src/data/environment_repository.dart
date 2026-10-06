@@ -3,6 +3,7 @@ import 'dart:convert';
 import 'package:http/http.dart' as http;
 
 import 'circuit.dart';
+import 'data_cache.dart';
 import 'circuit_environment.dart';
 
 /// Fetches circuit environments at runtime from F1TrackViewer's repository,
@@ -12,14 +13,19 @@ import 'circuit_environment.dart';
 /// while one circuit is a few hundred KB gzipped. The pinned URL never
 /// changes underneath us.
 class EnvironmentRepository {
-  EnvironmentRepository({http.Client? client})
-    : _http = client ?? http.Client();
+  EnvironmentRepository({http.Client? client, DataCache? cache})
+    : _http = client ?? http.Client(),
+      _files = cache ?? DataCache.instance;
 
   static const _base =
       'https://raw.githubusercontent.com/Makakashan/F1TrackViewer/'
       '2bb6c9f7019f63c933bad124705053b7984a4a13/public/environments';
 
   final http.Client _http;
+
+  /// The downloaded files, kept on the device: at a pinned commit they
+  /// never change.
+  final DataCache _files;
   final _cache = <String, Future<CircuitEnvironment>>{};
 
   Future<CircuitEnvironment> load(Circuit circuit) {
@@ -33,15 +39,20 @@ class EnvironmentRepository {
   Future<CircuitEnvironment> _fetch(Circuit circuit) async {
     final id = circuit.summary.id;
     Future<Map<String, dynamic>> get(String name) async {
-      final response = await _http.get(Uri.parse('$_base/$id/$name.json'));
-      if (response.statusCode != 200) {
-        throw http.ClientException(
-          '${response.statusCode}',
-          response.request?.url,
-        );
+      final url = '$_base/$id/$name.json';
+      var body = await _files.read(url);
+      if (body == null) {
+        final response = await _http.get(Uri.parse(url));
+        if (response.statusCode != 200) {
+          throw http.ClientException(
+            '${response.statusCode}',
+            response.request?.url,
+          );
+        }
+        body = response.bodyBytes;
+        await _files.write(url, body, Keep.device);
       }
-      return jsonDecode(utf8.decode(response.bodyBytes))
-          as Map<String, dynamic>;
+      return jsonDecode(utf8.decode(body)) as Map<String, dynamic>;
     }
 
     final (

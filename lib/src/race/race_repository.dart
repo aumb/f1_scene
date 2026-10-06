@@ -1,4 +1,7 @@
 import 'dart:math' as math;
+import 'dart:typed_data';
+
+import '../data/data_cache.dart';
 
 import 'openf1_client.dart';
 import 'race_models.dart';
@@ -23,6 +26,64 @@ class LocationBatch {
     series.x.add(x);
     series.y.add(y);
   }
+
+  static const _magic = 0x46314c42; // "F1LB"
+  static const _version = 1;
+
+  /// A compact binary form for the cache: ~16 bytes a sample against ~140
+  /// as OpenF1's JSON, and far quicker to read back.
+  Uint8List toBytes() {
+    final drivers = samples.entries.toList();
+    final count = drivers.fold(0, (n, d) => n + d.value.t.length);
+    final data = ByteData(20 + drivers.length * 8 + count * 16);
+    var at = 0;
+    void u32(int v) => data.setUint32((at += 4) - 4, v, Endian.little);
+    u32(_magic);
+    u32(_version);
+    data.setFloat64(at, epoch.microsecondsSinceEpoch / 1e6, Endian.little);
+    at += 8;
+    u32(drivers.length);
+    for (final MapEntry(key: driver, value: s) in drivers) {
+      u32(driver);
+      u32(s.t.length);
+    }
+    for (final MapEntry(value: s) in drivers) {
+      for (var i = 0; i < s.t.length; i++) {
+        data
+          ..setFloat64(at, s.t[i], Endian.little)
+          ..setFloat32(at + 8, s.x[i], Endian.little)
+          ..setFloat32(at + 12, s.y[i], Endian.little);
+        at += 16;
+      }
+    }
+    return data.buffer.asUint8List();
+  }
+
+  /// Reads [toBytes] back with times relative to [epoch], or null when
+  /// [bytes] are not in that form.
+  static LocationBatch? fromBytes(Uint8List bytes, DateTime epoch) {
+    if (bytes.length < 20) return null;
+    final data = ByteData.sublistView(bytes);
+    var at = 0;
+    int u32() => data.getUint32((at += 4) - 4, Endian.little);
+    if (u32() != _magic || u32() != _version) return null;
+    final shift =
+        data.getFloat64(at, Endian.little) - epoch.microsecondsSinceEpoch / 1e6;
+    at += 8;
+    final drivers = [for (var n = u32(), i = 0; i < n; i++) (u32(), u32())];
+    final batch = LocationBatch(epoch);
+    for (final (driver, count) in drivers) {
+      final t = List<double>.filled(count, 0), x = [...t], y = [...t];
+      for (var i = 0; i < count; i++) {
+        t[i] = data.getFloat64(at, Endian.little) + shift;
+        x[i] = data.getFloat32(at + 8, Endian.little);
+        y[i] = data.getFloat32(at + 12, Endian.little);
+        at += 16;
+      }
+      batch.samples[driver] = (t: t, x: x, y: y);
+    }
+    return batch;
+  }
 }
 
 /// Lets the event loop run, so a frame can be drawn, before continuing a
@@ -36,6 +97,20 @@ class RaceRepository {
   final OpenF1Client _client;
   final _racesByYear = <int, Future<List<RaceSession>>>{};
 
+  /// Every race listed so far, to tell which have settled.
+  final _sessions = <int, RaceSession>{};
+
+  /// How long [sessionKey]'s data may be kept: on the device once the race
+  /// is a day old (OpenF1 can still be filling in or correcting it before
+  /// that), else for this run only.
+  Keep _keepFor(int sessionKey) {
+    final session = _sessions[sessionKey];
+    final settled = DateTime.now().toUtc().subtract(const Duration(days: 1));
+    return session != null && session.end.isBefore(settled)
+        ? Keep.device
+        : Keep.session;
+  }
+
   /// Completed, non-cancelled races of [year], in calendar order.
   Future<List<RaceSession>> races(int year) =>
       _racesByYear[year] ??= _fetchRaces(year)
@@ -46,9 +121,14 @@ class RaceRepository {
           });
 
   Future<List<RaceSession>> _fetchRaces(int year) async {
+    // Past seasons' calendars are final; this one's grows race by race.
+    final keep = year < DateTime.now().year ? Keep.device : Keep.session;
     final (sessions, meetings) = await (
-      _client.get('sessions', {'year': year, 'session_name': 'Race'}),
-      _client.get('meetings', {'year': year}),
+      _client.get('sessions', {
+        'year': year,
+        'session_name': 'Race',
+      }, keep: keep),
+      _client.get('meetings', {'year': year}, keep: keep),
     ).wait;
     final names = {
       for (final m in meetings)
@@ -73,11 +153,16 @@ class RaceRepository {
                 ),
           ].where((r) => r.end.isBefore(now)).toList()
           ..sort((a, b) => a.start.compareTo(b.start));
+    for (final race in races) {
+      _sessions[race.sessionKey] = race;
+    }
     return races;
   }
 
   Future<List<RaceDriver>> drivers(int sessionKey) async {
-    final rows = await _client.get('drivers', {'session_key': sessionKey});
+    final rows = await _client.get('drivers', {
+      'session_key': sessionKey,
+    }, keep: _keepFor(sessionKey));
     return [
       for (final d in rows)
         RaceDriver(
@@ -93,7 +178,9 @@ class RaceRepository {
   }
 
   Future<List<RaceLap>> laps(int sessionKey) async {
-    final rows = await _client.get('laps', {'session_key': sessionKey});
+    final rows = await _client.get('laps', {
+      'session_key': sessionKey,
+    }, keep: _keepFor(sessionKey));
     return [
       for (final l in rows)
         RaceLap(
@@ -129,7 +216,9 @@ class RaceRepository {
   Future<List<({int driver, DateTime date, int position})>> positions(
     int sessionKey,
   ) async {
-    final rows = await _client.get('position', {'session_key': sessionKey});
+    final rows = await _client.get('position', {
+      'session_key': sessionKey,
+    }, keep: _keepFor(sessionKey));
     return [
       for (final r in rows)
         (
@@ -143,7 +232,9 @@ class RaceRepository {
   /// Gap to the leader and to the car ahead, sampled every few seconds.
   Future<List<({int driver, DateTime date, Gap? gap, Gap? interval})>>
   intervals(int sessionKey) async {
-    final rows = await _client.get('intervals', {'session_key': sessionKey});
+    final rows = await _client.get('intervals', {
+      'session_key': sessionKey,
+    }, keep: _keepFor(sessionKey));
     return [
       for (final r in rows)
         (
@@ -156,7 +247,9 @@ class RaceRepository {
   }
 
   Future<List<RaceStint>> stints(int sessionKey) async {
-    final rows = await _client.get('stints', {'session_key': sessionKey});
+    final rows = await _client.get('stints', {
+      'session_key': sessionKey,
+    }, keep: _keepFor(sessionKey));
     return [
       for (final r in rows)
         if (r['lap_start'] != null)
@@ -183,7 +276,7 @@ class RaceRepository {
       'session_key': sessionKey,
       'date>=': _timestamp(from),
       'date<': _timestamp(to),
-    });
+    }, keep: _keepFor(sessionKey));
     final open = <int, List<double>>{};
     final origin = epoch.microsecondsSinceEpoch / 1e6;
     for (final r in rows) {
@@ -197,7 +290,9 @@ class RaceRepository {
   }
 
   Future<List<RacePitStop>> pitStops(int sessionKey) async {
-    final rows = await _client.get('pit', {'session_key': sessionKey});
+    final rows = await _client.get('pit', {
+      'session_key': sessionKey,
+    }, keep: _keepFor(sessionKey));
     return [
       for (final p in rows)
         if (p['date'] != null)
@@ -220,12 +315,21 @@ class RaceRepository {
     required DateTime to,
     int? driver,
   }) async {
-    final rows = await _client.get('location', {
+    final filters = <String, Object>{
       'session_key': sessionKey,
       'driver_number': ?driver,
       'date>=': _timestamp(from),
       'date<': _timestamp(to),
-    });
+    };
+    // Kept in binary rather than as OpenF1's JSON: a race's worth is ~8 MB
+    // instead of ~80.
+    final key = '${_client.uriFor('location', filters)}#binary';
+    final cached = await _client.cache.read(key);
+    if (cached != null) {
+      final batch = LocationBatch.fromBytes(cached, epoch);
+      if (batch != null) return batch;
+    }
+    final rows = await _client.get('location', filters, keep: Keep.nothing);
     final batch = LocationBatch(epoch);
     final origin = epoch.microsecondsSinceEpoch / 1e6;
     for (var i = 0; i < rows.length; i++) {
@@ -240,6 +344,7 @@ class RaceRepository {
         (r['y'] as num).toDouble(),
       );
     }
+    await _client.cache.write(key, batch.toBytes(), _keepFor(sessionKey));
     return batch;
   }
 
