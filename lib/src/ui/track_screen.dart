@@ -5,20 +5,17 @@ import 'package:flutter_scene/scene.dart';
 import '../data/circuit.dart';
 import '../data/circuit_repository.dart';
 import '../data/environment_repository.dart';
-import '../geometry/track_mesh.dart';
 import '../race/race_models.dart';
 import '../race/race_replay.dart';
 import '../race/race_repository.dart';
 import '../race/venues.dart';
 import '../scene/track_scene.dart';
-import 'camera_bar.dart';
-import 'driver_card.dart';
 import 'frame_stats.dart';
-import 'hud.dart';
-import 'race_picker.dart';
+import 'hud_style.dart';
+import 'map_controls.dart';
+import 'playback_bar.dart';
+import 'race_rail.dart';
 import 'scene_gestures.dart';
-import 'timing_tower.dart';
-import 'timeline_bar.dart';
 
 /// Full-screen race replay on a circuit diorama, with a heads-up overlay.
 class TrackScreen extends StatefulWidget {
@@ -46,7 +43,6 @@ class _TrackScreenState extends State<TrackScreen> {
   RaceSession? _race;
   Circuit? _circuit;
   RaceReplay? _replay;
-  TrackColorMode _colorMode = TrackColorMode.sectors;
   CameraMode _cameraMode = CameraMode.orbit;
   bool _sceneReady = false;
 
@@ -92,7 +88,7 @@ class _TrackScreenState extends State<TrackScreen> {
       // every pipeline up front. CameraControls is not laid out yet, so seed
       // the viewport size used for framing; it keeps it current from here.
       _trackScene.orbit.viewportSize = MediaQuery.sizeOf(context);
-      _trackScene.showCircuit(circuit, _colorMode);
+      _trackScene.showCircuit(circuit);
       _loadEnvironment(circuit);
       setState(() {
         _circuit = circuit;
@@ -174,7 +170,7 @@ class _TrackScreenState extends State<TrackScreen> {
       if (_circuit?.summary.id != id) {
         final circuit = await _loadCircuit(id);
         if (stale()) return;
-        _trackScene.showCircuit(circuit, _colorMode);
+        _trackScene.showCircuit(circuit);
         _loadEnvironment(circuit);
         setState(() => _circuit = circuit);
       }
@@ -247,11 +243,6 @@ class _TrackScreenState extends State<TrackScreen> {
     _frameStats.record(dt, _tickWatch.elapsedMicroseconds / 1e6);
   }
 
-  void _setColorMode(TrackColorMode mode) {
-    _trackScene.setColorMode(mode);
-    setState(() => _colorMode = mode);
-  }
-
   void _setCameraMode(CameraMode mode) {
     _trackScene.cameraMode = mode;
     setState(() => _cameraMode = mode);
@@ -268,177 +259,161 @@ class _TrackScreenState extends State<TrackScreen> {
         _trackScene.resetView();
       case CameraMode.chase:
         _trackScene.chase.resetView();
+      case CameraMode.onboard:
+        _trackScene.onboard.lookYaw = 0;
       case CameraMode.tv:
         _setCameraMode(CameraMode.orbit);
         _trackScene.resetView();
     }
   }
 
-  /// The race picker, and either the circuit card or, during a race, the
-  /// timing tower and the followed driver's card.
-  Widget _topOverlay(Circuit? circuit) {
-    final replay = _replay;
-    final followed = _trackScene.followedDriver;
-    final picker = RacePicker(
-      seasons: _seasons,
-      season: _season,
-      races: _seasonRaces,
-      race: _race,
-      onSeason: _selectSeason,
-      onRace: _selectRace,
-    );
-    final Widget primary;
-    if (replay != null) {
-      primary = TimingTower(
-        replay: replay,
-        followed: followed,
-        onSelect: _follow,
-      );
-    } else if (circuit != null) {
-      primary = CircuitCard(circuit: circuit, race: _race);
-    } else {
-      primary = const SizedBox.shrink();
-    }
-    final card = replay != null && followed != null
-        ? DriverCard(replay: replay, driver: followed)
-        : null;
-
-    return LayoutBuilder(
-      builder: (context, constraints) {
-        // The tower scrolls when the window is too short for every row.
-        final scrolling = SingleChildScrollView(child: primary);
-        if (constraints.maxWidth < 720) {
-          return Column(
-            crossAxisAlignment: CrossAxisAlignment.start,
-            children: [
-              picker,
-              const SizedBox(height: 12),
-              Flexible(child: scrolling),
-            ],
-          );
-        }
-        return Row(
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            scrolling,
-            const Spacer(),
-            Column(
-              crossAxisAlignment: CrossAxisAlignment.end,
-              children: [
-                picker,
-                if (card != null) ...[const SizedBox(height: 12), card],
-              ],
-            ),
-          ],
-        );
-      },
-    );
-  }
-
   @override
   Widget build(BuildContext context) {
-    final circuit = _circuit;
     return CallbackShortcuts(
       bindings: {
         const SingleActivator(LogicalKeyboardKey.keyF): () =>
             setState(() => _showStats = !_showStats),
       },
-      child: _scaffold(circuit),
+      child: Scaffold(
+        backgroundColor: Hud.background,
+        body: SafeArea(
+          child: Padding(
+            padding: const EdgeInsets.all(12),
+            child: DecoratedBox(
+              decoration: BoxDecoration(
+                borderRadius: BorderRadius.circular(12),
+                border: Border.all(color: Hud.line),
+              ),
+              child: ClipRRect(
+                borderRadius: BorderRadius.circular(11),
+                child: LayoutBuilder(
+                  builder: (context, constraints) {
+                    // Docked rail beside the map; under it on a phone.
+                    if (constraints.maxWidth >= 760) {
+                      return Row(
+                        crossAxisAlignment: CrossAxisAlignment.stretch,
+                        children: [
+                          SizedBox(width: 290, child: _rail()),
+                          const VerticalDivider(width: 1, color: Hud.line),
+                          Expanded(child: _map()),
+                        ],
+                      );
+                    }
+                    return Column(
+                      crossAxisAlignment: CrossAxisAlignment.stretch,
+                      children: [
+                        Expanded(flex: 5, child: _map()),
+                        const Divider(height: 1, color: Hud.line),
+                        Expanded(flex: 4, child: _rail(compact: true)),
+                      ],
+                    );
+                  },
+                ),
+              ),
+            ),
+          ),
+        ),
+      ),
     );
   }
 
-  Widget _scaffold(Circuit? circuit) {
-    return Scaffold(
-      body: Stack(
-        fit: StackFit.expand,
-        children: [
-          // The scene has no skybox, so it composites over this backdrop.
-          const DecoratedBox(
-            decoration: BoxDecoration(
-              gradient: RadialGradient(
-                center: Alignment(0, -0.2),
-                radius: 1.2,
-                colors: [Color(0xFF1C2028), Color(0xFF07080A)],
-              ),
+  Widget _rail({bool compact = false}) => RaceRail(
+    seasons: _seasons,
+    season: _season,
+    races: _seasonRaces,
+    race: _race,
+    onSeason: _selectSeason,
+    onRace: _selectRace,
+    replay: _replay,
+    followed: _trackScene.followedDriver,
+    onFollow: _follow,
+    loading: _loadingRace,
+    error: _raceError,
+    onRetry: _retry,
+    compact: compact,
+  );
+
+  Widget _map() {
+    return Stack(
+      fit: StackFit.expand,
+      children: [
+        // The scene has no skybox, so it composites over this backdrop.
+        const DecoratedBox(
+          decoration: BoxDecoration(
+            gradient: RadialGradient(
+              center: Alignment(0, -0.2),
+              radius: 1.2,
+              colors: [Color(0xFF16181D), Hud.map],
             ),
           ),
-          if (_sceneReady)
-            SceneGestures(
-              input: _trackScene,
-              enabled: _cameraMode != CameraMode.tv,
-              child: SceneView(
-                _trackScene.scene,
-                warmUp: true,
-                onTick: _onTick,
-              ),
-            ),
-          if (_fatalError != null)
-            Center(child: Text('Failed to start: $_fatalError'))
-          else if (circuit == null)
-            const Center(child: CircularProgressIndicator()),
-          SafeArea(
-            child: Padding(
-              padding: const EdgeInsets.all(16),
-              child: Column(
-                crossAxisAlignment: CrossAxisAlignment.stretch,
+        ),
+        Column(
+          crossAxisAlignment: CrossAxisAlignment.stretch,
+          children: [
+            Expanded(
+              child: Stack(
+                fit: StackFit.expand,
                 children: [
-                  Expanded(child: _topOverlay(circuit)),
-                  Wrap(
-                    spacing: 8,
-                    runSpacing: 12,
-                    crossAxisAlignment: WrapCrossAlignment.center,
-                    children: [
-                      ColorModeMenu(mode: _colorMode, onChanged: _setColorMode),
-                      IconButton.filledTonal(
-                        tooltip: 'Reset view',
-                        onPressed: _resetView,
-                        icon: const Icon(Icons.center_focus_strong),
+                  if (_sceneReady)
+                    SceneGestures(
+                      input: _trackScene,
+                      enabled: _cameraMode != CameraMode.tv,
+                      child: SceneView(
+                        _trackScene.scene,
+                        warmUp: true,
+                        onTick: _onTick,
                       ),
-                      IconButton.filledTonal(
-                        tooltip: _trackScene.sceneryVisible
-                            ? 'Hide scenery'
-                            : 'Show scenery',
-                        isSelected: _trackScene.sceneryVisible,
-                        onPressed: () => setState(
+                    ),
+                  if (_fatalError != null)
+                    Center(
+                      child: Text(
+                        'Failed to start: $_fatalError',
+                        style: const TextStyle(color: Hud.muted),
+                      ),
+                    )
+                  else if (_circuit == null)
+                    const Center(child: CircularProgressIndicator()),
+                  Positioned(
+                    top: 14,
+                    right: 14,
+                    left: 14,
+                    child: Align(
+                      alignment: Alignment.topRight,
+                      child: MapControls(
+                        mode: _cameraMode,
+                        hasRace: _replay != null,
+                        onMode: _setCameraMode,
+                        scenery: _trackScene.sceneryVisible,
+                        onScenery: () => setState(
                           () => _trackScene.sceneryVisible =
                               !_trackScene.sceneryVisible,
                         ),
-                        icon: const Icon(Icons.landscape_outlined),
-                        selectedIcon: const Icon(Icons.landscape),
+                        onRecenter: _resetView,
                       ),
-                      const SizedBox(width: 4),
-                      CameraBar(
-                        mode: _cameraMode,
-                        drivers: _replay?.drivers ?? const [],
-                        followed: _trackScene.followedDriver,
-                        onMode: _setCameraMode,
-                        onFollow: _follow,
-                      ),
-                    ],
-                  ),
-                  const SizedBox(height: 12),
-                  if (_sceneReady)
-                    TimelineBar(
-                      replay: _replay,
-                      loading: _loadingRace,
-                      error: _raceError,
-                      onRetry: _retry,
                     ),
-                  const SizedBox(height: 12),
-                  if (_showStats) ...[
-                    Align(
-                      alignment: Alignment.centerLeft,
+                  ),
+                  if (_showStats)
+                    Positioned(
+                      top: 14,
+                      left: 14,
                       child: FrameStatsView(stats: _frameStats),
                     ),
-                    const SizedBox(height: 6),
-                  ],
-                  const Attribution(),
+                  const Positioned(
+                    left: 16,
+                    right: 16,
+                    bottom: 10,
+                    child: Align(
+                      alignment: Alignment.bottomLeft,
+                      child: Attribution(),
+                    ),
+                  ),
                 ],
               ),
             ),
-          ),
-        ],
-      ),
+            PlaybackBar(replay: _replay),
+          ],
+        ),
+      ],
     );
   }
 }

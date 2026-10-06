@@ -54,8 +54,10 @@ tool/         Data vendoring and alignment check scripts
   measured width (12 m where none is published). The coarse source outlines
   over-tighten a few hairpins, so the inside edge of any corner tighter than
   the half-width is pulled in to keep the surface from folding over.
-- **Look.** A dark slab, an extruded ribbon tinted by sector, elevation or
-  plain asphalt, ACES tone mapping, bloom and ambient occlusion.
+- **Look.** A dark slab, an extruded ribbon in one light colour that stands
+  out against the scenery, ACES tone mapping, bloom and ambient occlusion.
+  The HUD docks a rail on the left (race picker, timing tower, followed
+  driver) and gives the map everything else.
 - **Race data.** OpenF1 positions (~3.7 Hz per car) arrive in OpenF1's own
   circuit frame. One clean lap is fitted onto the centerline with a trimmed,
   scaled ICP (rotation, scale, translation, mirroring), which lands within
@@ -91,10 +93,12 @@ tool/         Data vendoring and alignment check scripts
   OpenStreetMap via F1TrackViewer's generated environments, fetched at
   runtime. The terrain is cut down and built up around the track so the
   ribbon always sits on it, buildings are extruded footprints, and trees are
-  instanced in woodland. The landscape button falls back to the plain slab.
+  instanced in woodland. The Terrain toggle falls back to the plain slab.
 - **Cars and cameras.** The car is a low-poly 2026-proportioned model built
-  in code (body in the team colour). Besides the orbit view, a chase camera
-  turns with the followed car, and a TV mode cuts between trackside posts on
+  in code, painted in an approximation of its team's colours with its number
+  on the nose and rear wing (no sponsor artwork, which is trademarked).
+  Besides the Overview, the Follow camera turns with the followed car,
+  Onboard rides on its airbox, and TV cuts between trackside posts on
   the outside of corners, zooming to keep the car framed. With scenery, each
   post is placed where sight lines to the approach it films clear the
   buildings and terrain, and the camera only cuts to posts that can see the

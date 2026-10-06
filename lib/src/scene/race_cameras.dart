@@ -89,6 +89,62 @@ class ChaseCameraController extends CameraController {
   }
 }
 
+/// From the car itself: a camera on the airbox looking down the track, as
+/// the broadcast T-cam does. Dragging looks around.
+class OnboardCameraController extends CameraController {
+  OnboardCameraController() : super(smoothing: 0.1);
+
+  /// The pose to ride with, read every frame.
+  CarPose? Function()? target;
+
+  /// Extra yaw from dragging, relative to straight ahead.
+  double lookYaw = 0;
+
+  double _yaw = 0;
+  double _pitch = 0;
+  bool _initialized = false;
+
+  /// Takes up the car's heading on the next frame instead of easing over.
+  void reset() => _initialized = false;
+
+  @override
+  void update(double deltaSeconds) {
+    final pose = target?.call();
+    if (pose == null) return;
+    final dt = clampDeltaSeconds(deltaSeconds);
+    // The camera is fixed to the car, but where it looks eases a touch, so
+    // the view turns with the car rather than twitching with it.
+    if (_initialized) {
+      _yaw += _wrapPi(pose.heading - _yaw) * settleResponse(0.08, dt);
+      _pitch += (pose.pitch - _pitch) * settleResponse(0.2, dt);
+    } else {
+      _yaw = pose.heading;
+      _pitch = pose.pitch;
+      _initialized = true;
+    }
+    // On top of the airbox, behind the driver's head.
+    final h = pose.heading;
+    final eye =
+        pose.position + Vector3(math.sin(h) * -0.15, 1.05, math.cos(h) * -0.15);
+    final yaw = _yaw + lookYaw;
+    final ahead = Vector3(
+      math.sin(yaw) * math.cos(_pitch),
+      math.sin(_pitch),
+      math.cos(yaw) * math.cos(_pitch),
+    );
+    // Looking a little down, so the nose sits low in the frame.
+    node.lookAtFrom(eye, eye + ahead * 30 + Vector3(0, -1.6, 0));
+  }
+
+  @override
+  void handleDragUpdate(Offset delta) {
+    lookYaw = (lookYaw - delta.dx * math.pi / viewportSize.width).clamp(
+      -math.pi,
+      math.pi,
+    );
+  }
+}
+
 /// A trackside camera position and which stretches of track it sees.
 class TvPost {
   TvPost(this.position, this.station, [this._visible]);

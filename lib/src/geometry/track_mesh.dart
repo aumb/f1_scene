@@ -25,9 +25,6 @@ class MeshArrays {
   int get triangleCount => indices.length ~/ 3;
 }
 
-/// How the driving surface is tinted.
-enum TrackColorMode { sectors, elevation, asphalt }
-
 /// Linear-space RGBA from an sRGB `0xRRGGBB` value.
 Vector4 linearColor(int rgb, [double alpha = 1]) {
   double channel(int shift) {
@@ -322,24 +319,16 @@ class TrackMeshBuilder {
   final Circuit circuit;
   final TrackStations stations;
 
-  static const sectorColors = [0x00A3FF, 0xB66DFF, 0x00D084];
-  static const elevationRamp = [0x2EC4B6, 0xF4D35E, 0xFF6B35];
-  static const asphaltColor = 0x5A5F6B;
+  /// The driving surface's one colour: light, so the circuit stands out
+  /// against the scenery and the cars on it, a shade under white so white
+  /// cars still show.
+  static const surfaceColor = 0xC8CDD5;
 
-  /// The driving surface across the full track width, tinted per [mode].
-  MeshArrays surface(TrackColorMode mode) =>
-      ribbonSurface(stations, surfaceColors(mode));
-
-  /// Vertex colors for [surface], so a tint change can update colors alone.
-  Float32List surfaceColors(TrackColorMode mode) {
-    final colors = Float32List(stations.length * 2 * 4);
-    for (var i = 0; i < stations.length; i++) {
-      final color = _surfaceColor(mode, i);
-      _put4(colors, i * 2, color);
-      _put4(colors, i * 2 + 1, color);
-    }
-    return colors;
-  }
+  /// The driving surface across the full track width.
+  MeshArrays surface() => ribbonSurface(
+    stations,
+    uniformRibbonColors(stations, linearColor(surfaceColor)),
+  );
 
   /// Skirts under both track edges down to [baseY].
   MeshArrays skirts(double baseY) => ribbonSkirts(stations, baseY);
@@ -520,28 +509,5 @@ class TrackMeshBuilder {
       }
     }
     return quads.build();
-  }
-
-  Vector4 _surfaceColor(TrackColorMode mode, int i) {
-    switch (mode) {
-      case TrackColorMode.sectors:
-        final sector = circuit.sectorAt(stations.s[i]).number;
-        return linearColor(sectorColors[(sector - 1) % sectorColors.length]);
-      case TrackColorMode.elevation:
-        final (lo, hi) = circuit.elevationRange;
-        final t = hi > lo ? (stations.center[i].y - lo) / (hi - lo) : 0.5;
-        return _ramp(elevationRamp, t);
-      case TrackColorMode.asphalt:
-        return linearColor(asphaltColor);
-    }
-  }
-
-  static Vector4 _ramp(List<int> stops, double t) {
-    final x = t.clamp(0.0, 1.0) * (stops.length - 1);
-    final i = math.min(x.floor(), stops.length - 2);
-    final a = linearColor(stops[i]), b = linearColor(stops[i + 1]);
-    final out = Vector4.zero();
-    Vector4.mix(a, b, x - i, out);
-    return out;
   }
 }

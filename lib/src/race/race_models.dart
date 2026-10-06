@@ -122,6 +122,13 @@ class Gap {
     return null;
   }
 
+  /// "+1.2", "+1L": for narrow columns.
+  String get shortLabel {
+    final laps = this.laps;
+    if (laps != null) return '+${laps}L';
+    return '+${seconds!.toStringAsFixed(1)}';
+  }
+
   /// "+1.234", "+1 LAP", "+2 LAPS".
   String get label {
     final laps = this.laps;

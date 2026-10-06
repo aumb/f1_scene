@@ -36,7 +36,7 @@ void main() {
       final mesh = TrackMeshBuilder(
         circuit,
         TrackStations.sample(circuit),
-      ).surface(TrackColorMode.sectors);
+      ).surface();
       var t = 0;
       for (final n in faceNormals(mesh)) {
         expect(n.y, greaterThan(0), reason: '${summary.id} triangle $t');

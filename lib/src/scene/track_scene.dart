@@ -22,6 +22,9 @@ enum CameraMode {
   /// Behind the followed car.
   chase,
 
+  /// Riding on the followed car.
+  onboard,
+
   /// Trackside broadcast cameras on the followed car.
   tv,
 }
@@ -40,6 +43,9 @@ class TrackScene implements CameraInput {
   /// Camera behind the followed car.
   late final ChaseCameraController chase;
 
+  /// Camera riding on the followed car.
+  late final OnboardCameraController onboard;
+
   late final Node _camera;
   late final PerspectiveProjection _projection;
   TvCameraController? _tv;
@@ -54,7 +60,6 @@ class TrackScene implements CameraInput {
   Circuit? _circuit;
   TrackMeshBuilder? _builder;
   Node? _diorama;
-  MeshGeometry? _surface;
   MeshGeometry? _skirts;
   Node? _slabNode;
   Node? _environmentNode;
@@ -156,6 +161,7 @@ class TrackScene implements CameraInput {
     orbit = MapCameraController(azimuth: _defaultAzimuth, polar: _defaultPolar)
       ..camera = () => _cameraComponent.toCamera();
     chase = ChaseCameraController()..target = _followedPose;
+    onboard = OnboardCameraController()..target = _followedPose;
     _projection = PerspectiveProjection(
       fovRadiansY: _fovY,
       near: 1,
@@ -178,14 +184,23 @@ class TrackScene implements CameraInput {
   // Camera input, routed to whichever camera is active. TV cameras take
   // none; the chase camera has no pan, so a pan swings it round the car.
 
+  /// Whether the orbit camera still shows the framing it was given, so a
+  /// change of viewport (the window, the layout settling) re-frames it.
+  /// Moving the camera by hand ends that.
+  bool _framed = false;
+
   @override
   set viewportSize(Size size) {
+    final changed = size != orbit.viewportSize;
     orbit.viewportSize = size;
     chase.viewportSize = size;
+    onboard.viewportSize = size;
+    if (changed && _framed) frameCircuit();
   }
 
   @override
   void orbitDrag(Offset delta) {
+    if (_cameraMode == CameraMode.orbit) _framed = false;
     switch (_cameraMode) {
       case CameraMode.orbit:
         final k = math.pi / math.max(1.0, orbit.viewportSize.height);
@@ -193,6 +208,8 @@ class TrackScene implements CameraInput {
         orbit.orbitBy(-delta.dx * k, delta.dy * k);
       case CameraMode.chase:
         chase.handleDragUpdate(delta);
+      case CameraMode.onboard:
+        onboard.handleDragUpdate(delta);
       case CameraMode.tv:
         break;
     }
@@ -200,11 +217,14 @@ class TrackScene implements CameraInput {
 
   @override
   void rotate(double radians) {
+    if (_cameraMode == CameraMode.orbit) _framed = false;
     switch (_cameraMode) {
       case CameraMode.orbit:
         orbit.orbitBy(radians, 0);
       case CameraMode.chase:
         chase.yawOffset += radians;
+      case CameraMode.onboard:
+        onboard.lookYaw += radians;
       case CameraMode.tv:
         break;
     }
@@ -212,11 +232,14 @@ class TrackScene implements CameraInput {
 
   @override
   void panDrag(Offset from, Offset to) {
+    if (_cameraMode == CameraMode.orbit) _framed = false;
     switch (_cameraMode) {
       case CameraMode.orbit:
         orbit.dragGround(from, to);
       case CameraMode.chase:
         chase.handleDragUpdate(to - from);
+      case CameraMode.onboard:
+        onboard.handleDragUpdate(to - from);
       case CameraMode.tv:
         break;
     }
@@ -224,12 +247,13 @@ class TrackScene implements CameraInput {
 
   @override
   void zoomAt(double factor, Offset focal) {
+    if (_cameraMode == CameraMode.orbit) _framed = false;
     switch (_cameraMode) {
       case CameraMode.orbit:
         orbit.zoomAt(factor, focal);
       case CameraMode.chase:
         chase.distance = (chase.distance / factor).clamp(6.0, 200.0);
-      case CameraMode.tv:
+      case CameraMode.onboard || CameraMode.tv:
         break;
     }
   }
@@ -241,8 +265,12 @@ class TrackScene implements CameraInput {
     if (mode == _cameraMode) return;
     _camera.removeComponent(activeController);
     _cameraMode = mode;
-    _projection.fovRadiansY = _fovY;
+    // Onboard wants the wide lens a car-mounted camera has.
+    _projection.fovRadiansY = mode == CameraMode.onboard
+        ? 62 * vm.degrees2Radians
+        : _fovY;
     chase.reset();
+    onboard.reset();
     _tv?.reset();
     _camera.addComponent(activeController);
   }
@@ -251,6 +279,7 @@ class TrackScene implements CameraInput {
   CameraController get activeController => switch (_cameraMode) {
     CameraMode.orbit => orbit,
     CameraMode.chase => chase,
+    CameraMode.onboard => onboard,
     CameraMode.tv => _tv ?? orbit,
   };
 
@@ -259,6 +288,7 @@ class TrackScene implements CameraInput {
   set followedDriver(int? driver) {
     _followed = driver;
     chase.reset();
+    onboard.reset();
     _tv?.reset();
   }
 
@@ -271,7 +301,7 @@ class TrackScene implements CameraInput {
 
   /// Replaces the diorama with [circuit] and frames it. Any race shown on
   /// the previous circuit is removed.
-  void showCircuit(Circuit circuit, TrackColorMode mode) {
+  void showCircuit(Circuit circuit) {
     showRace(null);
     final diorama = _diorama;
     if (diorama != null) scene.remove(diorama);
@@ -280,11 +310,7 @@ class TrackScene implements CameraInput {
     final builder = TrackMeshBuilder(circuit, stations);
     final baseY = circuit.elevationRange.$1 - _plinth;
 
-    // Updatable, so a tint change rewrites the color stream in place.
-    final surface = _geometry(
-      builder.surface(mode),
-      storage: GeometryStorage.updatable,
-    );
+    final surface = _geometry(builder.surface());
     // Updatable, so the skirts can reach down into terrain that arrives
     // later.
     final skirts = _geometry(
@@ -326,7 +352,6 @@ class TrackScene implements CameraInput {
     _circuit = circuit;
     _builder = builder;
     _diorama = root;
-    _surface = surface;
     _skirts = skirts;
     _environmentNode = null;
     _baseY = baseY;
@@ -549,18 +574,12 @@ class TrackScene implements CameraInput {
       ..highlighted = _cameraMode == CameraMode.orbit ? _followed : null;
   }
 
-  /// Re-tints the driving surface without rebuilding anything else.
-  void setColorMode(TrackColorMode mode) {
-    final builder = _builder, surface = _surface;
-    if (builder == null || surface == null) return;
-    surface.updateColors(builder.surfaceColors(mode));
-  }
-
   /// Points the orbit camera at the whole circuit, fitting its bounding
   /// sphere inside the narrower of the two fields of view.
   void frameCircuit() {
     final circuit = _circuit;
     if (circuit == null) return;
+    _framed = true;
     final bounds = circuit.bounds;
     final radius = (bounds.max - bounds.min).length / 2;
     final viewport = orbit.viewportSize;
