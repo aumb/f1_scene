@@ -14,7 +14,7 @@ exploring it. Runs on the web, macOS, iOS and Android.
 | 2 | Races from [OpenF1](https://openf1.org), cars moving on a scrubbable timeline | done |
 | 3 | Cars riding the track, pit lane, car model, chase and TV cameras | done |
 | 4 | Timing tower, driver card with sectors, DRS zones, kerbs | done |
-| 5 | Terrain, buildings, GitHub Pages build | next |
+| 5 | Terrain, buildings, roads, water and trees; GitHub Pages build | done |
 
 31 circuits are included, covering every venue on the 2023–2025 calendars.
 Of 2026's new or returning venues, Madrid and Sepang are not selectable yet:
@@ -75,10 +75,23 @@ tool/         Data vendoring and alignment check scripts
 - **Track details.** Kerbs follow curvature (inside every corner, outside
   the exit of tight ones). DRS zones are derived from where cars had DRS open
   over a few mid-race minutes (none in 2026, which replaced DRS).
+- **Scenery.** Terrain, buildings, roads, water and woods come from
+  OpenStreetMap via F1TrackViewer's generated environments, fetched at
+  runtime. The terrain is cut down and built up around the track so the
+  ribbon always sits on it, buildings are extruded footprints, and trees are
+  instanced in woodland. The landscape button falls back to the plain slab.
 - **Cars and cameras.** The car is a low-poly 2026-proportioned model built
   in code (body in the team colour). Besides the orbit view, a chase camera
   turns with the followed car, and a TV mode cuts between trackside posts on
   the outside of corners, zooming to keep the car framed.
+
+## Deploying
+
+[`.github/workflows/pages.yml`](.github/workflows/pages.yml) analyzes,
+tests, builds the web app and publishes it to GitHub Pages on every push to
+`main`. One-time setup in the repository: **Settings → Pages → Build and
+deployment → Source: GitHub Actions**. The site is served under
+`/<repository>/`, which the build's `--base-href` matches.
 
 ## Data
 
@@ -89,9 +102,9 @@ To refresh it:
 dart run tool/fetch_circuits.dart
 ```
 
-Sources and licenses are listed in [NOTICE.md](NOTICE.md). Race data is
-fetched from OpenF1 at runtime and held in memory, never committed to this
-repo.
+Sources and licenses are listed in [NOTICE.md](NOTICE.md). Race data
+(OpenF1) and scenery (OpenStreetMap, via F1TrackViewer) are fetched at
+runtime and held in memory, never committed to this repo.
 
 ## License
 

@@ -4,6 +4,8 @@ import 'package:flutter_scene/scene.dart';
 import 'package:vector_math/vector_math.dart' as vm;
 
 import '../data/circuit.dart';
+import '../data/circuit_environment.dart';
+import '../geometry/environment_mesh.dart';
 import '../geometry/track_mesh.dart';
 import '../geometry/track_projector.dart';
 import '../race/car_motion.dart';
@@ -47,6 +49,10 @@ class TrackScene {
   TrackMeshBuilder? _builder;
   Node? _diorama;
   MeshGeometry? _surface;
+  MeshGeometry? _skirts;
+  Node? _slabNode;
+  Node? _environmentNode;
+  bool _sceneryVisible = true;
   RaceReplay? _replay;
   CarsLayer? _cars;
   Node? _raceRoot;
@@ -71,6 +77,21 @@ class TrackScene {
     ..baseColorFactor = linearColor(0x2C3038)
     ..metallicFactor = 0
     ..roughnessFactor = 0.8;
+  final _terrainMaterial = PhysicallyBasedMaterial()
+    ..metallicFactor = 0
+    ..roughnessFactor = 0.95;
+  final _buildingMaterial = PhysicallyBasedMaterial()
+    ..metallicFactor = 0
+    ..roughnessFactor = 0.8;
+  final _roadMaterial = PhysicallyBasedMaterial()
+    ..metallicFactor = 0
+    ..roughnessFactor = 0.85
+    // Draped just above the ground; win any tie with it.
+    ..depthLayer = 1;
+  final _waterMaterial = PhysicallyBasedMaterial()
+    ..metallicFactor = 0
+    ..roughnessFactor = 0.15
+    ..depthLayer = 1;
   final _slabMaterial = PhysicallyBasedMaterial()
     ..baseColorFactor = linearColor(0x1A1D23)
     ..metallicFactor = 0
@@ -202,14 +223,20 @@ class TrackScene {
       builder.surface(mode),
       storage: GeometryStorage.updatable,
     );
+    // Updatable, so the skirts can reach down into terrain that arrives
+    // later.
+    final skirts = _geometry(
+      builder.skirts(baseY),
+      storage: GeometryStorage.updatable,
+    );
     final trackMesh = Mesh.primitives(
       primitives: [
         MeshPrimitive(surface, _surfaceMaterial),
-        MeshPrimitive(_geometry(builder.skirts(baseY)), _skirtMaterial),
+        MeshPrimitive(skirts, _skirtMaterial),
       ],
     );
     final root = Node(name: 'diorama ${circuit.summary.id}')
-      ..add(_slab(circuit, baseY))
+      ..add(_slabNode = _slab(circuit, baseY))
       ..add(Node(name: 'track', mesh: trackMesh))
       ..add(
         Node(
@@ -237,6 +264,8 @@ class TrackScene {
     _builder = builder;
     _diorama = root;
     _surface = surface;
+    _skirts = skirts;
+    _environmentNode = null;
     _baseY = baseY;
 
     final tv = TvCameraController(
@@ -250,6 +279,96 @@ class TrackScene {
     }
     _tv = tv;
     frameCircuit();
+  }
+
+  /// Whether the terrain, buildings and roads around the circuit show (when
+  /// loaded); otherwise the plain slab does.
+  bool get sceneryVisible => _sceneryVisible;
+  set sceneryVisible(bool visible) {
+    _sceneryVisible = visible;
+    final environment = _environmentNode;
+    environment?.visible = visible;
+    _slabNode?.visible = environment == null || !visible;
+  }
+
+  /// Surrounds the current circuit with [environment] in place of the slab.
+  void showEnvironment(CircuitEnvironment environment) {
+    final root = _diorama, builder = _builder, skirts = _skirts;
+    if (root == null || builder == null || skirts == null) return;
+    final previous = _environmentNode;
+    if (previous != null) root.remove(previous);
+
+    final meshes = EnvironmentMeshBuilder(
+      environment,
+      TrackProjector(builder.stations),
+    );
+    final baseY = math.min(meshes.lowestGround, _baseY) - 25;
+    final node = Node(name: 'environment')
+      ..add(
+        Node(
+          name: 'terrain',
+          mesh: Mesh(_geometry(meshes.terrainBlock(baseY)), _terrainMaterial),
+        ),
+      )
+      ..add(
+        Node(
+          name: 'buildings',
+          mesh: Mesh(_geometry(meshes.buildings()), _buildingMaterial),
+        ),
+      )
+      ..add(
+        Node(
+          name: 'roads',
+          mesh: Mesh(_geometry(meshes.roads()), _roadMaterial),
+        ),
+      )
+      ..add(
+        Node(
+          name: 'water',
+          mesh: Mesh(_geometry(meshes.water()), _waterMaterial),
+        ),
+      );
+    final trees = meshes.trees();
+    if (trees.isNotEmpty) node.add(_trees(trees));
+    root.add(node);
+    _environmentNode = node;
+
+    // Reach the skirts down into the block, so no gap opens under the
+    // ribbon where the ground falls away.
+    _baseY = baseY;
+    skirts.updatePositions(builder.skirts(baseY).positions);
+    sceneryVisible = _sceneryVisible;
+  }
+
+  Node _trees(List<vm.Vector3> positions) {
+    final random = math.Random(3);
+    final mesh = InstancedMesh(
+      geometry: CylinderGeometry(
+        bottomRadius: 2.4,
+        topRadius: 0,
+        height: 8,
+        radialSegments: 7,
+      ),
+      material: PhysicallyBasedMaterial()
+        ..baseColorFactor = linearColor(0x35593C)
+        ..metallicFactor = 0
+        ..roughnessFactor = 0.9,
+      cullInstances: true,
+    );
+    for (final p in positions) {
+      // 10-16 m: forest trees, tall enough to read from the orbit view.
+      final scale = 1.2 + random.nextDouble() * 0.8;
+      mesh.addInstance(
+        vm.Matrix4.compose(
+          // The cone is centered on its origin; stand it on the ground.
+          p + vm.Vector3(0, 4 * scale, 0),
+          vm.Quaternion.identity(),
+          vm.Vector3.all(scale),
+        ),
+        color: vm.Vector4.all(0.8 + random.nextDouble() * 0.4)..w = 1,
+      );
+    }
+    return Node(name: 'trees')..addComponent(InstancedMeshComponent(mesh));
   }
 
   /// Shows the cars and pit lane of [replay] on the current circuit, or

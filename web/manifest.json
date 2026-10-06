@@ -3,10 +3,10 @@
     "short_name": "f1_scene",
     "start_url": ".",
     "display": "standalone",
-    "background_color": "#0175C2",
-    "theme_color": "#0175C2",
-    "description": "A new Flutter project.",
-    "orientation": "portrait-primary",
+    "background_color": "#07080A",
+    "theme_color": "#07080A",
+    "description": "Formula 1 race replays on 3D circuit dioramas, built with flutter_scene.",
+    "orientation": "any",
     "prefer_related_applications": false,
     "icons": [
         {

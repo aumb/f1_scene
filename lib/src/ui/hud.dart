@@ -210,7 +210,8 @@ class Attribution extends StatelessWidget {
       'Unofficial fan project, not affiliated with Formula 1. '
       'Race data: OpenF1 (CC BY-NC-SA 4.0). '
       'Track data: bacinger/f1-circuits (MIT), F1TrackViewer (MIT), '
-      'TUMFTM racetrack-database (LGPL-3.0), OpenTopoData (CC-BY 4.0).',
+      'TUMFTM racetrack-database (LGPL-3.0), OpenTopoData (CC-BY 4.0). '
+      'Scenery: © OpenStreetMap contributors, Open-Meteo.',
       style: theme.textTheme.labelSmall?.copyWith(
         color: theme.colorScheme.onSurfaceVariant.withValues(alpha: 0.7),
       ),

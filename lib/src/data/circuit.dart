@@ -55,6 +55,7 @@ class Circuit {
     required this.sectors,
     required this._widthSamples,
     required this.elevationRange,
+    required this.meanElevation,
   });
 
   /// Builds a circuit from the vendored JSON documents of one circuit folder.
@@ -122,6 +123,7 @@ class Circuit {
           ? null
           : [for (final w in width['samples'] as List) (w as num).toDouble()],
       elevationRange: (ys.reduce(math.min), ys.reduce(math.max)),
+      meanElevation: mean,
     );
   }
 
@@ -147,6 +149,9 @@ class Circuit {
 
   /// Lowest and highest centerline heights in scene meters.
   final (double, double) elevationRange;
+
+  /// Mean centerline elevation above sea level; scene height 0.
+  final double meanElevation;
 
   bool get hasMeasuredWidth => _widthSamples != null;
 

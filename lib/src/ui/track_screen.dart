@@ -3,6 +3,7 @@ import 'package:flutter_scene/scene.dart';
 
 import '../data/circuit.dart';
 import '../data/circuit_repository.dart';
+import '../data/environment_repository.dart';
 import '../geometry/track_mesh.dart';
 import '../race/race_models.dart';
 import '../race/race_replay.dart';
@@ -29,6 +30,7 @@ class _TrackScreenState extends State<TrackScreen> {
   static const _fallbackCircuitId = 'bh-2002';
 
   final _circuits = CircuitRepository();
+  final _environments = EnvironmentRepository();
   final _races = RaceRepository();
   final _trackScene = TrackScene();
 
@@ -83,6 +85,7 @@ class _TrackScreenState extends State<TrackScreen> {
       // the viewport size used for framing; it keeps it current from here.
       _trackScene.orbit.viewportSize = MediaQuery.sizeOf(context);
       _trackScene.showCircuit(circuit, _colorMode);
+      _loadEnvironment(circuit);
       setState(() {
         _circuit = circuit;
         _sceneReady = true;
@@ -164,6 +167,7 @@ class _TrackScreenState extends State<TrackScreen> {
         final circuit = await _loadCircuit(id);
         if (stale()) return;
         _trackScene.showCircuit(circuit, _colorMode);
+        _loadEnvironment(circuit);
         setState(() => _circuit = circuit);
       }
       final replay = await RaceReplay.load(
@@ -211,6 +215,18 @@ class _TrackScreenState extends State<TrackScreen> {
           _selectRace(race);
         }
       });
+    }
+  }
+
+  /// Fetches the scenery around [circuit] and shows it if that circuit is
+  /// still on screen. The plain slab stays when it cannot be fetched.
+  Future<void> _loadEnvironment(Circuit circuit) async {
+    try {
+      final environment = await _environments.load(circuit);
+      if (!mounted || _trackScene.circuit != circuit) return;
+      _trackScene.showEnvironment(environment);
+    } catch (e) {
+      debugPrint('No scenery for ${circuit.summary.id}: $e');
     }
   }
 
@@ -350,6 +366,18 @@ class _TrackScreenState extends State<TrackScreen> {
                         tooltip: 'Reset view',
                         onPressed: _resetView,
                         icon: const Icon(Icons.center_focus_strong),
+                      ),
+                      IconButton.filledTonal(
+                        tooltip: _trackScene.sceneryVisible
+                            ? 'Hide scenery'
+                            : 'Show scenery',
+                        isSelected: _trackScene.sceneryVisible,
+                        onPressed: () => setState(
+                          () => _trackScene.sceneryVisible =
+                              !_trackScene.sceneryVisible,
+                        ),
+                        icon: const Icon(Icons.landscape_outlined),
+                        selectedIcon: const Icon(Icons.landscape),
                       ),
                       const SizedBox(width: 4),
                       CameraBar(

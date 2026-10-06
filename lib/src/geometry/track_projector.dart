@@ -64,6 +64,13 @@ class TrackProjector {
   /// A hinted match further than this from the path is treated as lost.
   static const double _maxHintedDistance = 25;
 
+  /// Projects ([x], [z]) onto the path, or null when it is further than
+  /// [maxDistance] from every station.
+  PathPoint? projectWithin(double x, double z, double maxDistance) {
+    final nearest = _grid.nearest(x, z, maxDistance: maxDistance).index;
+    return nearest < 0 ? null : _best(x, z, nearest - 2, nearest + 2);
+  }
+
   /// Projects ([x], [z]) onto the path.
   PathPoint project(double x, double z, {int? hint}) {
     if (hint != null) {

@@ -31,7 +31,13 @@ class RaceReplay extends ChangeNotifier {
     required this._leaderLapStarts,
     required this.raceStart,
     required double end,
-  }) : timeline = LocationTimeline(start: raceStart - _preRoll, end: end) {
+  }) : timeline = LocationTimeline(
+         // From the session start when that is earlier: after a red flag on
+         // lap 1 (Monaco 2024), OpenF1 times lap 1 from the restart, and the
+         // original start would otherwise be cut off.
+         start: math.min(0.0, raceStart - _preRoll),
+         end: end,
+       ) {
     time.value = raceStart - 15;
     _updateStandings();
   }

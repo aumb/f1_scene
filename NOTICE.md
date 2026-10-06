@@ -14,6 +14,15 @@ folder keeps its upstream license.
 | `widths/` | Track width profiles | [Makakashan/F1TrackViewer](https://github.com/Makakashan/F1TrackViewer), derived from [TUMFTM/racetrack-database](https://github.com/TUMFTM/racetrack-database) | [LGPL-3.0](https://www.gnu.org/licenses/lgpl-3.0.html) |
 | `index.json` | Circuit names and countries | [Makakashan/F1TrackViewer](https://github.com/Makakashan/F1TrackViewer) | MIT |
 
+## Scenery
+
+The terrain, buildings, roads, water and land use around each circuit are
+fetched at runtime from F1TrackViewer's generated environments
+(`public/environments/`, at the pinned commit), not redistributed here. They
+are derived from [OpenStreetMap](https://www.openstreetmap.org/copyright)
+(© OpenStreetMap contributors, [ODbL](https://opendatacommons.org/licenses/odbl/))
+and [Open-Meteo](https://open-meteo.com/) elevation (CC-BY 4.0).
+
 ## Race data
 
 Race timing and car positions are fetched at runtime from

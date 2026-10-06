@@ -145,12 +145,16 @@ class CarMotion {
     PathPoint? pit;
     if (pitLane != null) {
       final (lo, hi) = track.lateralLimits(onTrack.along);
-      final beside =
-          onTrack.lateral > hi + _pitMinOffTrack ||
-          onTrack.lateral < lo - _pitMinOffTrack;
-      if (beside) {
+      final beyond = math.max(onTrack.lateral - hi, lo - onTrack.lateral);
+      if (beyond > _pitMinOffTrack) {
         final candidate = pitLane.project(x, z, hint: _pitHints[driver]);
-        if (candidate.distance <= _pitMaxDistance) pit = candidate;
+        // Closer to the pit lane than to the track: a car on a straight
+        // wider than the track's estimated width (Monaco's grid sits next
+        // to the pit lane) stays on track.
+        if (candidate.distance <= _pitMaxDistance &&
+            candidate.distance < beyond) {
+          pit = candidate;
+        }
       }
     }
     return _Located(x, z, onTrack, pit);

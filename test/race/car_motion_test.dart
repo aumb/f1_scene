@@ -129,6 +129,46 @@ void main() {
     );
   });
 
+  test('a car just wide of the estimated edge is not in the pit lane', () {
+    // Pit lane 10 m beyond the left edge along stations 100-400, as at
+    // Monaco, where the grid is wider than the estimated track width.
+    final lane = TrackStations.fromPath(
+      [
+        for (var i = 100; i <= 400; i++)
+          stations.center[i] + stations.left[i] * (stations.leftOffset[i] + 10),
+      ],
+      List.filled(301, 5),
+      closed: false,
+    );
+    final motion = CarMotion(
+      alignment: identity,
+      track: track,
+      pitLane: TrackProjector(lane),
+    );
+    final wide = motion.pose(
+      1,
+      windowAround(
+        1,
+        from: 200,
+        speed: 0,
+        lateral: stations.leftOffset[200] + 2.5,
+      ),
+      1,
+    )!;
+    expect(wide.inPit, isFalse);
+    final inLane = motion.pose(
+      2,
+      windowAround(
+        1,
+        from: 200,
+        speed: 0,
+        lateral: stations.leftOffset[200] + 10,
+      ),
+      1,
+    )!;
+    expect(inLane.inPit, isTrue);
+  });
+
   test('crosses the start/finish seam without a jump', () {
     final motion = CarMotion(alignment: identity, track: track);
     final n = stations.length.toDouble();

@@ -1,5 +1,3 @@
-import 'dart:math' as math;
-
 /// Uniform grid over 2D points for nearest-neighbour queries.
 class PointGrid {
   PointGrid(this.xs, this.ys, {this.cellSize = 20})
@@ -18,33 +16,52 @@ class PointGrid {
       ((x / cellSize).floor(), (y / cellSize).floor());
 
   /// Index of the point closest to ([x], [y]) and its squared distance.
-  ({int index, double distanceSquared}) nearest(double x, double y) {
+  ///
+  /// With [maxDistance], gives up beyond it and returns index -1.
+  ({int index, double distanceSquared}) nearest(
+    double x,
+    double y, {
+    double? maxDistance,
+  }) {
     final (cx, cy) = _cellOf(x, y);
     var best = -1;
-    var bestD2 = double.infinity;
+    var bestD2 = maxDistance == null
+        ? double.infinity
+        : maxDistance * maxDistance;
+    void visit(int gx, int gy) {
+      final cell = _cells[(gx, gy)];
+      if (cell == null) return;
+      for (final i in cell) {
+        final ex = xs[i] - x, ey = ys[i] - y;
+        final d2 = ex * ex + ey * ey;
+        if (d2 < bestD2) {
+          bestD2 = d2;
+          best = i;
+        }
+      }
+    }
+
     for (var ring = 0; ; ring++) {
       // Every point outside the searched rings is at least this far away.
       final reach = (ring - 1) * cellSize;
-      if (best >= 0 && reach > 0 && reach * reach > bestD2) break;
-      for (var dx = -ring; dx <= ring; dx++) {
-        for (var dy = -ring; dy <= ring; dy++) {
-          if (math.max(dx.abs(), dy.abs()) != ring) continue;
-          final cell = _cells[(cx + dx, cy + dy)];
-          if (cell == null) continue;
-          for (final i in cell) {
-            final ex = xs[i] - x, ey = ys[i] - y;
-            final d2 = ex * ex + ey * ey;
-            if (d2 < bestD2) {
-              bestD2 = d2;
-              best = i;
-            }
-          }
+      if (reach > 0 && reach * reach > bestD2) break;
+      if (ring == 0) {
+        visit(cx, cy);
+      } else {
+        // Only the ring's perimeter: its inside was searched already.
+        for (var d = -ring; d <= ring; d++) {
+          visit(cx + d, cy - ring);
+          visit(cx + d, cy + ring);
+        }
+        for (var d = -ring + 1; d < ring; d++) {
+          visit(cx - ring, cy + d);
+          visit(cx + ring, cy + d);
         }
       }
       // Far outside the data: fall back to a scan rather than ringing forever.
-      if (best < 0 && ring > 64) return _scan(x, y);
+      if (best < 0 && maxDistance == null && ring > 64) return _scan(x, y);
     }
-    return (index: best, distanceSquared: bestD2);
+    return (index: best, distanceSquared: best < 0 ? double.infinity : bestD2);
   }
 
   ({int index, double distanceSquared}) _scan(double x, double y) {
