@@ -15,11 +15,13 @@ void main() {
   final (:stations, :track) = bahrain();
 
   /// Motion on Bahrain, in the scene's own frame, with [pitLane] if given.
-  CarMotion newMotion({TrackStations? pitLane}) => CarMotion(
-    alignment: SimilarityTransform2D.identity,
-    track: track,
-    pitLane: pitLane == null ? null : TrackProjector(pitLane),
-  );
+  CarMotion newMotion({TrackStations? pitLane, int directionSign = 1}) =>
+      CarMotion(
+        alignment: SimilarityTransform2D.identity,
+        track: track,
+        pitLane: pitLane == null ? null : TrackProjector(pitLane),
+        directionSign: directionSign,
+      );
 
   /// Samples of a car driving at [speed] m/s from station [from], [lateral]
   /// meters left of the centerline and moving left at [drift] m/s, every
@@ -121,6 +123,100 @@ void main() {
     final pose = motion.pose(1, windowAround(1, from: 40, speed: 0), 1)!;
     final forward = stations.forward[40];
     expect(pose.heading, closeTo(math.atan2(forward.x, forward.z), 0.05));
+  });
+
+  test('reversed racing direction stays fixed at walking pace and at rest', () {
+    for (final speed in [-0.5, 0.0, 0.5]) {
+      final motion = newMotion(directionSign: -1);
+      final pose = motion.pose(
+        1,
+        windowAround(1, from: 40, speed: speed, lateral: 0),
+        1,
+      )!;
+      final forward = track.place(pose.along!, 0).forward;
+      final nose = Matrix4.compose(
+        Vector3.zero(),
+        pose.rotation,
+        Vector3.all(1),
+      ).transform3(Vector3(0, 0, 1));
+      expect(nose.dot(forward), lessThan(-0.999));
+    }
+  });
+
+  test(
+    'reversed cars follow their nose through slopes, corners and the seam',
+    () {
+      for (final from in [10.0, 300.0, 1000.0]) {
+        final motion = newMotion(directionSign: -1);
+        for (var t = 0.3; t < 3; t += 0.05) {
+          final a = motion.pose(
+            1,
+            windowAround(t, from: from, speed: -40, lateral: 0),
+            t,
+          )!;
+          final b = motion.pose(
+            1,
+            windowAround(t + 0.01, from: from, speed: -40, lateral: 0),
+            t + 0.01,
+          )!;
+          final nose = Matrix4.compose(
+            Vector3.zero(),
+            a.rotation,
+            Vector3.all(1),
+          ).transform3(Vector3(0, 0, 1));
+          expect(
+            nose.dot((b.position - a.position).normalized()),
+            greaterThan(0.99),
+          );
+          expect(a.speed, closeTo(-40, 2));
+          expect(a.forwardSpeed, closeTo(40, 2));
+        }
+      }
+    },
+  );
+
+  test('reversed cars turn their nose toward lateral movement', () {
+    for (final drift in [-3.0, 3.0]) {
+      final motion = newMotion(directionSign: -1);
+      final pose = motion.pose(
+        1,
+        windowAround(1, from: 200, speed: -60, lateral: 0, drift: drift),
+        1,
+      )!;
+      final nose = Vector3(math.sin(pose.heading), 0, math.cos(pose.heading));
+      final left = track.place(pose.along!, 0).forward;
+      final storedLeft = leftOf(left);
+      expect(nose.dot(storedLeft).sign, drift.sign);
+    }
+  });
+
+  test('pit lane keeps its traced direction on a reversed circuit', () {
+    final lane = TrackStations.fromPath(
+      [
+        for (var i = 400; i >= 100; i--)
+          stations.center[i] - stations.left[i] * 25,
+      ],
+      List.filled(301, 5),
+      closed: false,
+    );
+    final motion = newMotion(pitLane: lane, directionSign: -1);
+    final points = [for (var i = 200; i <= 215; i += 5) lane.center[i]];
+    final window = SampleWindow(
+      [0, 0.26, 0.52, 0.78],
+      [for (final p in points) p.x],
+      [for (final p in points) p.z],
+      1,
+    );
+    final a = motion.pose(1, window, 0.4)!;
+    final b = motion.pose(1, window, 0.41)!;
+    final nose = Matrix4.compose(
+      Vector3.zero(),
+      a.rotation,
+      Vector3.all(1),
+    ).transform3(Vector3(0, 0, 1));
+    expect(a.inPit, isTrue);
+    expect(a.directionSign, 1);
+    expect(nose.dot((b.position - a.position).normalized()), greaterThan(0.99));
   });
 
   test('turns its nose toward a lane change', () {

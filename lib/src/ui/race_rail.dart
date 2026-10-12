@@ -437,7 +437,7 @@ class _DriverCard extends StatelessWidget {
             ? rows[index + 1]
             : null;
         final timing = replay.timing.driverAt(driver, replay.time.value);
-        final speed = replay.currentPoses[driver]?.speed;
+        final speed = replay.currentPoses[driver]?.speed.abs();
         final ahead = row == null || row.position == 1
             ? Hud.unknown
             : row.interval?.shortLabel ?? Hud.unknown;

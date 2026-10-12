@@ -69,11 +69,13 @@ class TrafficSeparation {
       final sideways = (now[i] - before[i]) / _yawLead;
       out[driver] = CarPose(
         placed.position,
-        pose.heading + CarMotion.yawFor(sideways, pose.speed),
+        pose.heading +
+            CarMotion.yawFor(sideways * pose.directionSign, pose.forwardSpeed),
         pitch: pose.pitch,
         along: pose.along,
         lateral: now[i],
         speed: pose.speed,
+        directionSign: pose.directionSign,
       );
     }
     return out;
@@ -97,8 +99,8 @@ class TrafficSeparation {
     ];
 
     // Each car's springs to the cars close to it: the other car, the
-    // spring's stiffness and which side this car takes (+1 left). Cars are
-    // in number order, so car i, the lower number, always takes the left.
+    // spring's stiffness and which side this car takes (+1 left of the path).
+    // Cars are in number order, so car i takes the left of the racing direction.
     final springs = [for (final _ in cars) <(int, double, double)>[]];
     var any = false;
     for (var i = 0; i < cars.length; i++) {
@@ -115,8 +117,9 @@ class TrafficSeparation {
         // Stiffness that holds a lone pair exactly [share] of
         // [sideBySideSpacing] apart against each car's pull back to the line.
         final k = share / (2 * (1 - share));
-        springs[i].add((j, k, 1.0));
-        springs[j].add((i, k, -1.0));
+        final side = cars[i].pose.directionSign.toDouble();
+        springs[i].add((j, k, side));
+        springs[j].add((i, k, -side));
         any = true;
       }
     }

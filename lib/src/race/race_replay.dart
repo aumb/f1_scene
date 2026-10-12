@@ -102,6 +102,7 @@ class RaceReplay extends ChangeNotifier {
       repository: repository,
       motion: CarMotion(
         alignment: alignment.transform,
+        directionSign: alignment.directionSign,
         track: track,
         pitLane: pitLane == null ? null : TrackProjector(pitLane),
       ),

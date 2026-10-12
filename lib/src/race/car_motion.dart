@@ -17,6 +17,7 @@ class CarPose {
     this.along,
     this.lateral = 0,
     this.speed = 0,
+    this.directionSign = 1,
   });
 
   /// On the driving surface.
@@ -36,11 +37,17 @@ class CarPose {
   /// Position along the circuit in track stations, when on it.
   final double? along;
 
-  /// Offset left of the centerline (of the pit lane when in it), meters.
+  /// Offset left of the stored path (of the pit lane when in it), meters.
   final double lateral;
 
-  /// Speed along the path, m/s.
+  /// Signed speed toward increasing path stations, m/s.
   final double speed;
+
+  /// Racing direction relative to the path, kept even when stopped.
+  final int directionSign;
+
+  /// Speed in the racing direction, m/s.
+  double get forwardSpeed => speed * directionSign;
 
   /// The car's orientation: yaw, then pitch about its own lateral axis.
   /// Maps the model's forward (+Z) onto the direction of travel.
@@ -57,11 +64,19 @@ class CarPose {
 /// between samples 20 m apart, smooths speed, and keeps every car on the
 /// ribbon despite the few meters of alignment error and sensor noise.
 class CarMotion {
-  CarMotion({required this.alignment, required this.track, this.pitLane});
+  CarMotion({
+    required this.alignment,
+    required this.track,
+    this.pitLane,
+    this.directionSign = 1,
+  }) : assert(directionSign == 1 || directionSign == -1);
 
   final SimilarityTransform2D alignment;
   final TrackProjector track;
   final TrackProjector? pitLane;
+
+  /// From the reference lap, since circuit metadata can disagree with it.
+  final int directionSign;
 
   /// Half a car's width; it stays this far inside the edges.
   static const double carHalfWidth = 1.0;
@@ -182,16 +197,20 @@ class CarMotion {
     final lateral = rawLateral.clamp(min, max);
     final placed = projector.place(position, lateral);
 
-    final forward = placed.forward;
+    // Pit lanes are traced in travel order; only the circuit can be reversed.
+    final direction = onPit ? 1 : directionSign;
+    final forward = placed.forward * direction.toDouble();
     final speed = velocity * projector.metersPerStation;
     return CarPose(
       placed.position,
-      math.atan2(forward.x, forward.z) + yawFor(lateralVelocity, speed),
+      math.atan2(forward.x, forward.z) +
+          yawFor(lateralVelocity * direction, speed * direction),
       pitch: math.asin(forward.y.clamp(-1.0, 1.0)),
       inPit: onPit,
       along: onPit ? null : position % n,
       lateral: lateral,
       speed: speed,
+      directionSign: direction,
     );
   }
 

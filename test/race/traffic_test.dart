@@ -1,6 +1,9 @@
+import 'dart:math' as math;
+
 import 'package:f1_scene/src/race/car_motion.dart';
 import 'package:f1_scene/src/race/traffic.dart';
 import 'package:flutter_test/flutter_test.dart';
+import 'package:vector_math/vector_math.dart';
 
 import '../support/circuits.dart';
 
@@ -88,6 +91,57 @@ void main() {
       }
     }
   });
+
+  test(
+    'a reversed pass keeps cars facing and steering into their movement',
+    () {
+      CarPose reversedCar(double meters, double speed) {
+        final along = meters / mps;
+        final placed = track.place(along, 0);
+        return CarPose(
+          placed.position,
+          math.atan2(-placed.forward.x, -placed.forward.z),
+          pitch: -math.asin(placed.forward.y),
+          along: along,
+          speed: -speed,
+          directionSign: -1,
+        );
+      }
+
+      Map<int, CarPose> at(double t) => traffic.separate({
+        4: reversedCar(1030 - 80 * t, 80),
+        11: reversedCar(1000 - 70 * t, 70),
+      });
+      var turned = false;
+      for (var t = 0.0; t < 6; t += 0.05) {
+        final now = at(t), next = at(t + 0.01);
+        final a = now[4]!, b = now[11]!;
+        expect(a.lateral, lessThanOrEqualTo(b.lateral + 1e-9));
+        if ((a.along! - b.along!).abs() * mps < 5.2) {
+          expect(b.lateral - a.lateral, greaterThan(2));
+        }
+        for (final driver in now.keys) {
+          final pose = now[driver]!;
+          final nose = Matrix4.compose(
+            Vector3.zero(),
+            pose.rotation,
+            Vector3.all(1),
+          ).transform3(Vector3(0, 0, 1));
+          final travel = (next[driver]!.position - pose.position).normalized();
+          expect(nose.dot(travel), greaterThan(0.99));
+          expect(pose.directionSign, -1);
+          final base = reversedCar(
+            driver == 4 ? 1030 - 80 * t : 1000 - 70 * t,
+            driver == 4 ? 80 : 70,
+          );
+          if ((pose.heading - base.heading).abs() > 0.001) {
+            turned = true;
+          }
+        }
+      }
+      expect(turned, isTrue);
+    },
+  );
 
   test('two pairs meeting reorder smoothly instead of jumping', () {
     // Cars 3 and 4 side by side; 18 and 27 side by side, catching them.

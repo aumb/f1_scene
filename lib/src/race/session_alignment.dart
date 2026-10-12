@@ -1,5 +1,6 @@
 import '../geometry/track_alignment.dart';
 import '../geometry/track_mesh.dart';
+import '../geometry/track_projector.dart';
 import 'race_models.dart';
 import 'race_repository.dart';
 
@@ -28,8 +29,9 @@ RaceLap referenceLap(List<RaceLap> laps) {
 ///
 /// OpenF1 reports positions in its own frame: decimetres, x east and y
 /// north give or take a few degrees, about an arbitrary origin. This finds
-/// the similarity transform onto the scene.
-Future<AlignmentResult> alignToLap({
+/// the similarity transform onto the scene and the direction of racing,
+/// which can oppose the stored centerline even when metadata says otherwise.
+Future<SessionAlignment> alignToLap({
   required RaceRepository repository,
   required RaceSession session,
   required RaceLap lap,
@@ -49,12 +51,54 @@ Future<AlignmentResult> alignToLap({
   if (samples == null || samples.t.length < _minSamples) {
     throw StateError('Not enough position data to align the circuit');
   }
-  return alignToPath(
-    source: [
-      for (var i = 0; i < samples.t.length; i++) (samples.x[i], samples.y[i]),
-    ],
+  final order = List.generate(samples.t.length, (i) => i)
+    ..sort((a, b) => samples.t[a].compareTo(samples.t[b]));
+  final source = [for (final i in order) (samples.x[i], samples.y[i])];
+  final alignment = alignToPath(
+    source: source,
     target: [for (final c in stations.center) (c.x, c.z)],
   );
+  return SessionAlignment(
+    alignment.transform,
+    alignment.rmsError,
+    directionSign: racingDirection([
+      for (final (x, y) in source) alignment.transform.apply(x, y),
+    ], TrackProjector(stations)),
+  );
+}
+
+/// The fit and racing direction of a session relative to the stored path.
+class SessionAlignment extends AlignmentResult {
+  const SessionAlignment(
+    super.transform,
+    super.rmsError, {
+    required this.directionSign,
+  });
+
+  final int directionSign;
+}
+
+/// Racing direction from time-ordered scene positions of a reference lap.
+/// The median step ignores occasional projection errors and stationary noise.
+int racingDirection(List<(double, double)> positions, TrackProjector track) {
+  final steps = <double>[];
+  PathPoint? previous;
+  final n = track.stations.length;
+  for (final (x, z) in positions) {
+    final point = track.project(x, z, hint: previous?.station);
+    if (previous != null) {
+      var step = point.along - previous.along;
+      if (track.stations.closed) {
+        if (step > n / 2) step -= n;
+        if (step < -n / 2) step += n;
+      }
+      if (step.abs() * track.metersPerStation > 0.5) steps.add(step);
+    }
+    previous = point;
+  }
+  if (steps.isEmpty) throw StateError('No movement in the reference lap');
+  steps.sort();
+  return steps[steps.length ~/ 2] < 0 ? -1 : 1;
 }
 
 /// Positions a lap must have for the fit to be trusted (~13 s at 3.85 Hz).

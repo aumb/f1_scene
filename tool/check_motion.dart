@@ -71,12 +71,13 @@ Future<void> main(List<String> args) async {
   final track = TrackProjector(stations);
   final laps = await repository.laps(race.sessionKey);
   final reference = referenceLap(laps);
-  final transform = (await alignToLap(
+  final alignment = await alignToLap(
     repository: repository,
     session: race,
     lap: reference,
     stations: stations,
-  )).transform;
+  );
+  final transform = alignment.transform;
   final pitLane = await tracePitLane(
     repository: repository,
     session: race,
@@ -102,6 +103,7 @@ Future<void> main(List<String> args) async {
     ..addChunk(0, raw ? batch : await correctStampJitter(batch));
   final motion = CarMotion(
     alignment: transform,
+    directionSign: alignment.directionSign,
     track: track,
     pitLane: pitLane == null ? null : TrackProjector(pitLane),
   );
